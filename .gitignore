@@ -1,0 +1,17 @@
+# Ignore everything by default
+/*
+
+# Keep this file
+!.gitignore
+
+# Allow Assets directory
+!/Assets/
+
+# Ignore everything under Assets by default
+/Assets/*
+
+# Include only _Scripts folder and its contents (and .meta files)
+!/Assets/_Scripts/
+!/Assets/_Scripts/**
+!/Assets/_Scripts.meta
+!/Assets/_Scripts/**.meta
