@@ -6,15 +6,16 @@ using UnityEngine;
 namespace ManaGambit
 {
 
-public enum UnitState
-{
-    Idle,
-    Moving,
-    Attacking
-}
+    public enum UnitState
+    {
+        Idle,
+        Moving,
+        WindUp,
+        Attacking
+    }
 
-public class Unit : MonoBehaviour
-{
+    public class Unit : MonoBehaviour
+    {
         [SerializeField] private Vector2Int currentPosition;
 
         [SerializeField] private int currentHp;
@@ -27,6 +28,7 @@ public class Unit : MonoBehaviour
 
         private CancellationTokenSource moveCts;
         private const float MoveDuration = 1f;
+        private const int DefaultBasicActionIndex = 0;
 
         public Vector2Int CurrentPosition => currentPosition;
 
@@ -113,15 +115,29 @@ public class Unit : MonoBehaviour
             Attack(new Vector2Int(x, y));
         }
 
-        public void Attack(Vector2Int target)
+        public async void Attack(Vector2Int target)
         {
-            SetState(UnitState.Attacking);
-
-            Debug.Log($"{name} attacking position {target}");
             transform.LookAt(Board.Instance.GetWorldPosition(target));
 
-            // TODO: Add attack duration or wait for animation
-            // For now, immediately back to idle; expand later
+            // Determine wind-up from config for default/basic action (index 0)
+            int windUpMs = 0;
+            if (NetworkManager.Instance != null && NetworkManager.Instance.UnitConfigAsset != null)
+            {
+                windUpMs = NetworkManager.Instance.UnitConfigAsset.GetWindUpMs(pieceId, DefaultBasicActionIndex);
+            }
+            Debug.Log($"{name} attacking position {target} (windUpMs={windUpMs})");
+
+            if (windUpMs > 0)
+            {
+                SetState(UnitState.WindUp);
+                // Wait for wind-up duration before the hit occurs
+                await UniTask.Delay(windUpMs);
+            }
+
+            SetState(UnitState.Attacking);
+
+            // TODO: trigger damage application here once server/client impact exists
+
             SetState(UnitState.Idle);
         }
 
@@ -134,6 +150,39 @@ public class Unit : MonoBehaviour
             // TODO: Stop other actions if any
             Debug.Log($"{name} stopped");
             SetState(UnitState.Idle);
+        }
+
+        public void ApplyStatusChanges(StatusChange[] changes)
+        {
+            if (changes == null || changes.Length == 0) return;
+            // Minimal placeholder: log and provide hook for future icon updates
+            for (int i = 0; i < changes.Length; i++)
+            {
+                var c = changes[i];
+                if (c == null) continue;
+                Debug.Log($"[{name}] Status {c.name} {c.op} ({c.startTick}->{c.endTick})");
+            }
+            // Forward to a UnitStatusIcons component if present
+            try
+            {
+                var behaviours = GetComponents<MonoBehaviour>();
+                for (int i = 0; i < behaviours.Length; i++)
+                {
+                    var b = behaviours[i];
+                    if (b == null) continue;
+                    var t = b.GetType();
+                    if (t != null && t.Name == "UnitStatusIcons")
+                    {
+                        var mi = t.GetMethod("Apply", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic);
+                        if (mi != null)
+                        {
+                            mi.Invoke(b, new object[] { changes });
+                        }
+                        break;
+                    }
+                }
+            }
+            catch { /* ignore icon errors */ }
         }
 
         public void SetInitialData(UnitServerData data, bool setWorldPosition = false)

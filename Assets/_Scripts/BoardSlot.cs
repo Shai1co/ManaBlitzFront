@@ -12,12 +12,16 @@ namespace ManaGambit
 		private MeshRenderer mouseHighlightRenderer;
 
 		[SerializeField]
+		private MeshRenderer skillHighlightRenderer;
+
+		[SerializeField]
 		private Unit occupant;
 
 		public bool IsOccupied => occupant != null;
 		public Unit Occupant => occupant;
 
 		public bool IsHighlighted => highlightRenderer != null && highlightRenderer.enabled;
+		public bool IsSkillHighlighted => skillHighlightRenderer != null && skillHighlightRenderer.enabled;
 
 		public void ShowHighlight()
 		{
@@ -86,6 +90,20 @@ namespace ManaGambit
 					}
 				}
 			}
+
+			// Setup skill highlight (separate overlay)
+			if (skillHighlightRenderer == null)
+			{
+				var skillChild = transform.Find("SkillHighlight");
+				if (skillChild != null)
+				{
+					skillHighlightRenderer = skillChild.GetComponent<MeshRenderer>();
+					if (skillHighlightRenderer != null)
+					{
+						skillHighlightRenderer.enabled = false;
+					}
+				}
+			}
 		}
 
 		private void Awake()
@@ -109,6 +127,11 @@ namespace ManaGambit
 			{
 				mouseHighlightRenderer.enabled = false;
 			}
+
+			if (skillHighlightRenderer != null)
+			{
+				skillHighlightRenderer.enabled = false;
+			}
 		}
 
 		public void ShowMouseHighlight()
@@ -130,6 +153,28 @@ namespace ManaGambit
 			if (mouseHighlightRenderer != null)
 			{
 				mouseHighlightRenderer.enabled = isVisible;
+			}
+		}
+
+		public void ShowSkillHighlight()
+		{
+			SetSkillHighlightVisible(true);
+		}
+
+		public void HideSkillHighlight()
+		{
+			SetSkillHighlightVisible(false);
+		}
+
+		public void SetSkillHighlightVisible(bool isVisible)
+		{
+			if (skillHighlightRenderer == null)
+			{
+				EnsureSetup();
+			}
+			if (skillHighlightRenderer != null)
+			{
+				skillHighlightRenderer.enabled = isVisible;
 			}
 		}
 
@@ -158,6 +203,7 @@ namespace ManaGambit
 			// Ensure no highlight remains visible if object is disabled
 			if (highlightRenderer != null) highlightRenderer.enabled = false;
 			if (mouseHighlightRenderer != null) mouseHighlightRenderer.enabled = false;
+			if (skillHighlightRenderer != null) skillHighlightRenderer.enabled = false;
 		}
 
 		public void SetOccupant(Unit unit)

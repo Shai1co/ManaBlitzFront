@@ -10,6 +10,7 @@ namespace ManaGambit
         private const string IdleStateName = "Idle";
         private const string WalkStateName = "Walk";
         private const string AttackStateName = "Attack";
+        private const string WindUpStateName = "WindUp"; // optional; falls back if missing
         private const int BaseLayerIndex = 0; // Avoid magic number for base layer
 
         private void Awake()
@@ -37,6 +38,13 @@ namespace ManaGambit
                     break;
                 case UnitState.Moving:
                     TryPlayState(WalkStateName);
+                    break;
+                case UnitState.WindUp:
+                    if (!TryPlayState(WindUpStateName))
+                    {
+                        // If no dedicated wind-up state, optionally hold Idle/Walk
+                        TryPlayState(IdleStateName);
+                    }
                     break;
                 case UnitState.Attacking:
                     TryPlayState(AttackStateName);

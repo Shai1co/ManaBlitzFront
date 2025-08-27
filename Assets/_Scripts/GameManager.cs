@@ -53,6 +53,12 @@ namespace ManaGambit
             units.Clear();
         }
 
+        public void UnregisterUnit(string unitId)
+        {
+            if (string.IsNullOrEmpty(unitId)) return;
+            units.Remove(unitId);
+        }
+
         public void ExecuteCommand(string unitID, string command, int x = -1, int y = -1)
         {
             if (!units.TryGetValue(unitID, out var unit))

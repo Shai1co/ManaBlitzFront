@@ -2,7 +2,7 @@
 // THIS FILE HAS BEEN GENERATED AUTOMATICALLY
 // DO NOT CHANGE IT MANUALLY UNLESS YOU KNOW WHAT YOU'RE DOING
 // 
-// GENERATED USING @colyseus/schema 3.0.56
+// GENERATED USING @colyseus/schema 3.0.59
 // 
 
 using Colyseus.Schema;
@@ -18,10 +18,13 @@ public RoomState() { }
 	[Type(0, "number")]
 	public float startTick = default(float);
 
-	[Type(1, "ref", typeof(BoardState))]
+	[Type(1, "number")]
+	public float serverTick = default(float);
+
+	[Type(2, "ref", typeof(BoardState))]
 	public BoardState board = null;
 
-	[Type(2, "map", typeof(MapSchema<MovingState>))]
+	[Type(3, "map", typeof(MapSchema<MovingState>))]
 	public MapSchema<MovingState> moving = null;
 }
 

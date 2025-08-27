@@ -4,6 +4,7 @@ using Colyseus.Schema;
 using Cysharp.Threading.Tasks;
 using UnityEngine;
 using UnityEngine.Networking;
+using Newtonsoft.Json.Linq;
 using System.Collections.Generic;
 using System;
 
@@ -19,11 +20,18 @@ namespace ManaGambit
 		private static readonly Vector3 BoardSpawnOffset = new Vector3(4f, 0f, 4f);
 
 		[SerializeField] private string serverUrl = "https://manablitz.onrender.com/";
+		private string cachedEtag = null;
+		private string lastConfigJson = null;
 
 		private ColyseusClient colyseusClient;
 		private ColyseusRoom<RoomState> room;
+		private string lastRoomId;
+		private string lastSessionId;
+		private ReconnectionToken lastReconnectionToken;
 
 		[SerializeField] private UnitConfig unitConfig;  // Assign in Inspector
+		[SerializeField] private bool verboseNetworkLogging = false;
+		public UnitConfig UnitConfigAsset => unitConfig;
 
 		// Spawn orientation configuration (editable in Inspector)
 		[SerializeField, Tooltip("X-axis rotation offset applied to spawned units (degrees)")]
@@ -59,6 +67,10 @@ namespace ManaGambit
 			var request = new UnityWebRequest(url, "GET");
 			request.downloadHandler = new DownloadHandlerBuffer();
 			request.SetRequestHeader("Authorization", $"Bearer {AuthManager.Instance.Token}");
+			if (!string.IsNullOrEmpty(cachedEtag))
+			{
+				request.SetRequestHeader("If-None-Match", cachedEtag);
+			}
 
 			var operation = request.SendWebRequest();
 			await UniTask.WaitUntil(() => operation.isDone);
@@ -69,12 +81,24 @@ namespace ManaGambit
 				Debug.LogError($"{LogTag} Fetch config failed: {request.error} (HTTP {(long)request.responseCode})");
 				return false;
 			}
+			// Handle 304 Not Modified
+			if ((long)request.responseCode == 304)
+			{
+				Debug.Log($"{LogTag} Config not modified (ETag match). Using cached config.");
+				return !string.IsNullOrEmpty(lastConfigJson);
+			}
 
 			try
 			{
-				var cfg = JsonUtility.FromJson<CombinedConfig>(request.downloadHandler.text);
+				var body = request.downloadHandler.text;
+				var cfg = JsonUtility.FromJson<CombinedConfig>(body);
 				RulesHash = cfg.rulesHash;
 				Debug.Log($"{LogTag} Config fetched. characters={(cfg.characters != null ? cfg.characters.Length : 0)}, rulesHash={RulesHash}");
+				lastConfigJson = body;
+				if (request.GetResponseHeaders() != null && request.GetResponseHeaders().TryGetValue("ETag", out var etag))
+				{
+					cachedEtag = etag;
+				}
 			}
 			catch (Exception ex)
 			{
@@ -215,6 +239,10 @@ namespace ManaGambit
 			}
 
 			Debug.Log($"{LogTag} Joined room. roomId='{roomId}', sessionId='{room.SessionId}'");
+			// cache for reconnects
+			lastRoomId = room.RoomId;
+			lastSessionId = room.SessionId;
+			lastReconnectionToken = room.ReconnectionToken;
 			// Log all message types for visibility during bring-up
 			room.OnMessage("*", (string type) =>
 			{
@@ -224,15 +252,130 @@ namespace ManaGambit
 			room.OnMessage<StateSnapshot>("StateSnapshot", snap => { Debug.Log($"{LogTag} StateSnapshot received"); if (snap != null && snap.board != null) SetupBoard(snap.board); });
 			room.OnMessage<GameEvent>("GameStart", evt => { if (evt != null && evt.data != null && evt.data.board != null) SetupBoard(evt.data.board); });
 			room.OnMessage<GameEvent>("GameAboutToStart", evt => { if (evt != null && evt.data != null && evt.data.board != null) SetupBoard(evt.data.board); });
-			room.OnMessage<MoveEvent>("Move", evt => { if (evt != null && evt.data != null) HandleMove(evt.data); });
+			room.OnMessage<MoveEvent>("Move", evt => { if (evt != null && evt.data != null) { HandleMove(evt.data); if (!string.IsNullOrEmpty(evt.intentId) && IntentManager.Instance != null) IntentManager.Instance.HandleIntentResponse(evt.intentId); } });
 			room.OnMessage<GameEvent>("ManaUpdate", _ => { /* ignore to avoid warnings for now */ });
+			// Some servers emit generic notifications on 'ServerEvent'; log and ignore
+			room.OnMessage<ServerEventEnvelopeRaw>("ServerEvent", envelope =>
+			{
+				if (envelope == null)
+				{
+					Debug.LogWarning($"{LogTag} ServerEvent received null envelope");
+					return;
+				}
+				if (verboseNetworkLogging)
+				{
+					Debug.Log($"{LogTag} ServerEvent type={envelope.type} intentId={envelope.intentId} tick={envelope.serverTick}");
+				}
+				switch (envelope.type)
+				{
+					case "Move":
+						if (envelope.data != null)
+						{
+							try
+							{
+								var move = envelope.data.ToObject<MoveData>();
+								if (move != null) { HandleMove(move); if (!string.IsNullOrEmpty(envelope.intentId) && IntentManager.Instance != null) IntentManager.Instance.HandleIntentResponse(envelope.intentId); }
+							}
+							catch (System.Exception ex)
+							{
+								Debug.LogWarning($"{LogTag} Failed to parse ServerEvent.Move: {ex.Message}");
+							}
+						}
+						break;
+					case "UseSkill":
+						// Start wind-up visuals on the attacking unit if present
+						try
+						{
+							var use = envelope.data != null ? envelope.data.ToObject<UseSkillData>() : null;
+							if (use != null && !string.IsNullOrEmpty(use.unitId))
+							{
+								var unit = GameManager.Instance.GetUnitById(use.unitId);
+								if (unit != null)
+								{
+									// Face target cell and enter wind-up state; animation decides visuals
+									unit.Attack(new Vector2Int(use.target?.cell?.x ?? unit.CurrentPosition.x, use.target?.cell?.y ?? unit.CurrentPosition.y));
+								}
+							}
+						}
+						catch (System.Exception) { /* ignore */ }
+						break;
+					case "UseSkillResult":
+						try
+						{
+							var res = envelope.data != null ? envelope.data.ToObject<UseSkillResultData>() : null;
+							if (res != null && res.targets != null)
+							{
+								for (int i = 0; i < res.targets.Length; i++)
+								{
+									var t = res.targets[i];
+									// Minimal: mark killed units for removal
+									if (t != null && t.killed)
+									{
+										var victim = GameManager.Instance.GetUnitById(t.unitId);
+										if (victim != null)
+										{
+											Destroy(victim.gameObject);
+											GameManager.Instance.UnregisterUnit(t.unitId);
+										}
+									}
+								}
+								if (!string.IsNullOrEmpty(envelope.intentId) && IntentManager.Instance != null) IntentManager.Instance.HandleIntentResponse(envelope.intentId);
+							}
+						}
+						catch (System.Exception) { /* ignore */ }
+						break;
+					default:
+						if (verboseNetworkLogging)
+						{
+							Debug.Log($"{LogTag} Unhandled ServerEvent type={envelope.type}");
+						}
+						break;
+				}
+			});
 			room.OnMessage<GameEvent>("StateHeartbeat", _ => { /* ignore */ });
 			room.OnMessage<UseSkillEvent>("UseSkill", evt => { /* TODO: trigger cast visuals if needed */ });
 			room.OnMessage<UseSkillResultEvent>("UseSkillResult", evt => { /* TODO: show impacts/damage */ });
-			room.OnMessage<StatusUpdateEvent>("StatusUpdate", evt => { /* TODO: update status icons */ });
+			room.OnMessage<StatusUpdateEvent>("StatusUpdate", evt =>
+			{
+				try
+				{
+					var unitId = evt != null && evt.data != null ? evt.data.unitId : null;
+					if (!string.IsNullOrEmpty(unitId))
+					{
+						var unit = GameManager.Instance.GetUnitById(unitId);
+						if (unit != null)
+						{
+							unit.ApplyStatusChanges(evt.data.changes);
+						}
+					}
+				}
+				catch (Exception ex)
+				{
+					Debug.LogWarning($"{LogTag} StatusUpdate handler exception: {ex.Message}");
+				}
+			});
 			room.OnMessage<GameOverEvent>("GameOver", evt => { Debug.Log($"{LogTag} GameOver: reason={evt?.data?.reason} winner={evt?.data?.winnerUserId}"); });
-			room.OnMessage<ErrorEvent>("Error", evt => { Debug.LogWarning($"{LogTag} Error: code={evt?.data?.code} msg={evt?.data?.msg}"); });
-			room.OnMessage<ValidTargetsEvent>("ValidTargets", evt => { OnValidTargets?.Invoke(evt); });
+			room.OnMessage<ErrorEvent>("Error", evt =>
+			{
+				if (evt == null || evt.data == null)
+				{
+					Debug.LogWarning($"{LogTag} Error (no data)");
+				}
+				else
+				{
+					Debug.LogWarning($"{LogTag} Error: code={evt.data.code} msg={evt.data.msg} iid={evt.data.iid} retry={evt.data.retry}");
+					if (IntentManager.Instance != null)
+					{
+						IntentManager.Instance.HandleIntentError(evt);
+					}
+				}
+			});
+			room.OnMessage<ValidTargetsEvent>("ValidTargets", evt =>
+			{
+				int count = evt?.data?.targets != null ? evt.data.targets.Length : 0;
+				Debug.Log($"{LogTag} ValidTargets received for unit={evt?.data?.unitId} count={count}");
+				OnValidTargets?.Invoke(evt);
+			});
 		}
 
 		public System.Action<ValidTargetsEvent> OnValidTargets;
@@ -241,6 +384,10 @@ namespace ManaGambit
 		{
 			if (room == null) return;
 			var req = new RequestValidTargets { unitId = unitId, name = name };
+			if (verboseNetworkLogging)
+			{
+				Debug.Log($"{LogTag} RequestValidTargets unitId={unitId} name={name}");
+			}
 			room.Send("RequestValidTargets", req);
 		}
 
@@ -253,6 +400,12 @@ namespace ManaGambit
 			}
 			try
 			{
+				if (verboseNetworkLogging)
+				{
+					string payloadJson = string.Empty;
+					try { payloadJson = JsonUtility.ToJson(envelope.payload); } catch { }
+					Debug.Log($"{LogTag} SendIntent name={envelope.name} iid={envelope.intentId} matchId={envelope.matchId} userId={envelope.userId} payload={payloadJson}");
+				}
 				room.Send("Intent", envelope);
 			}
 			catch (Exception ex)
@@ -263,20 +416,20 @@ namespace ManaGambit
 
 		private void OnDisable()
 		{
-			_ = CleanupAsync();
+			CleanupAsync().Forget();
 		}
 
 		private void OnDestroy()
 		{
-			_ = CleanupAsync();
+			CleanupAsync().Forget();
 		}
 
 		private void OnApplicationQuit()
 		{
-			_ = CleanupAsync();
+			CleanupAsync().Forget();
 		}
 
-		private async UniTaskVoid CleanupAsync()
+		private async UniTask CleanupAsync()
 		{
 			try
 			{
@@ -293,6 +446,32 @@ namespace ManaGambit
 			catch (Exception ex)
 			{
 				Debug.LogWarning($"{LogTag} Cleanup exception: {ex.Message}");
+			}
+		}
+
+		public async UniTask Disconnect()
+		{
+			await CleanupAsync();
+		}
+
+		public async UniTask Reconnect()
+		{
+			try
+			{
+				if (colyseusClient == null || lastReconnectionToken == null)
+				{
+					Debug.LogWarning($"{LogTag} Cannot reconnect: missing client or reconnection token");
+					return;
+				}
+				room = await colyseusClient.Reconnect<RoomState>(lastReconnectionToken);
+				Debug.Log($"{LogTag} Reconnected to room. sessionId='{room.SessionId}'");
+				lastRoomId = room.RoomId;
+				lastSessionId = room.SessionId;
+				lastReconnectionToken = room.ReconnectionToken;
+			}
+			catch (Exception ex)
+			{
+				Debug.LogWarning($"{LogTag} Reconnect failed: {ex.Message}");
 			}
 		}
 
@@ -349,7 +528,7 @@ namespace ManaGambit
 				// Apply rotation offsets
 				var isOwnUnit = string.Equals(unitData.ownerId, AuthManager.Instance.UserId);
 				var local = instance.transform.localEulerAngles;
-				local.x = spawnRotationOffsetXDeg;
+				local.x = isOwnUnit ? spawnRotationOffsetXDeg : -spawnRotationOffsetXDeg;
 				local.y = isOwnUnit ? ownUnitYawDeg : enemyUnitYawDeg;
 				instance.transform.localEulerAngles = local;
 
@@ -453,6 +632,15 @@ namespace ManaGambit
 		private class StateSnapshot
 		{
 			public BoardData board;
+		}
+
+		[Serializable]
+		private class ServerEventEnvelopeRaw
+		{
+			public string type;
+			public string intentId;
+			public int serverTick;
+			public JObject data;
 		}
 
 		private static string BuildWebSocketEndpointFromHttp(string httpUrl)

@@ -2,6 +2,7 @@
 using UnityEngine;
 using System.Collections.Generic;
 using Sirenix.OdinInspector;
+using System.Text.RegularExpressions;
 
 namespace ManaGambit
 {
@@ -68,6 +69,27 @@ namespace ManaGambit
 				var bs = slot != null ? slot.GetComponent<BoardSlot>() : null;
 				if (bs == null) continue;
 				bs.HideHighlight();
+				bs.HideSkillHighlight();
+			}
+		}
+
+		public void ClearMoveHighlights()
+		{
+			foreach (var kv in coordToSlot)
+			{
+				var bs = kv.Value != null ? kv.Value.GetComponent<BoardSlot>() : null;
+				if (bs == null) continue;
+				bs.HideHighlight();
+			}
+		}
+
+		public void ClearSkillHighlights()
+		{
+			foreach (var kv in coordToSlot)
+			{
+				var bs = kv.Value != null ? kv.Value.GetComponent<BoardSlot>() : null;
+				if (bs == null) continue;
+				bs.HideSkillHighlight();
 			}
 		}
 
@@ -86,21 +108,29 @@ namespace ManaGambit
 		{
 			coordToSlot.Clear();
 			slotToCoord.Clear();
-			if (boardContainer == null) return;
-
-			for (int i = 0; i < boardContainer.childCount; i++)
+			if (boardContainer == null)
 			{
-				var child = boardContainer.GetChild(i);
-				if (child == null) continue;
-				// Expected name format: "row_col" e.g., "0_0"
-				var parts = child.name.Split('_');
-				if (parts.Length != 2) continue;
-				if (!int.TryParse(parts[0], out int row)) continue;
-				if (!int.TryParse(parts[1], out int col)) continue;
+				boardContainer = transform;
+				if (boardContainer == null)
+				{
+					Debug.LogWarning("Board: boardContainer is null; cannot build slots.");
+					return;
+				}
+			}
+
+			var all = boardContainer.GetComponentsInChildren<Transform>(true);
+			int added = 0;
+			for (int i = 0; i < all.Length; i++)
+			{
+				var child = all[i];
+				if (child == null || child == boardContainer) continue;
+				// Try to extract two integers from the name (supports prefixes/suffixes like "Tile_0_0")
+				if (!TryExtractRowCol(child.name, out int row, out int col)) continue;
 				var coord = new Vector2Int(col, row); // first number is row (y), second is column (x)
 				if (!coordToSlot.ContainsKey(coord))
 				{
 					coordToSlot.Add(coord, child);
+					added++;
 				}
 				if (!slotToCoord.ContainsKey(child))
 				{
@@ -114,7 +144,19 @@ namespace ManaGambit
 				boardSlot.EnsureSetup();
 				coordToBoardSlot[coord] = boardSlot;
 			}
-			Debug.Log($"Built {coordToSlot.Count} slots from container");
+			Debug.Log($"Built {coordToSlot.Count} slots from container (added {added})");
+		}
+
+		private static bool TryExtractRowCol(string name, out int row, out int col)
+		{
+			row = 0; col = 0;
+			if (string.IsNullOrEmpty(name)) return false;
+			var matches = Regex.Matches(name, "-?\\d+");
+			if (matches == null || matches.Count < 2) return false;
+			// Use the last two integers in the name
+			if (!int.TryParse(matches[matches.Count - 2].Value, out row)) return false;
+			if (!int.TryParse(matches[matches.Count - 1].Value, out col)) return false;
+			return true;
 		}
 
 		public bool TryGetSlot(Vector2Int coord, out Transform slot)
@@ -161,6 +203,18 @@ namespace ManaGambit
 			foreach (var coord in coords)
 			{
 				HighlightSlot(coord, visible);
+			}
+		}
+
+		public void HighlightSkillSlots(IEnumerable<Vector2Int> coords, bool visible)
+		{
+			if (coords == null) return;
+			foreach (var coord in coords)
+			{
+				if (coordToBoardSlot.TryGetValue(coord, out var boardSlot))
+				{
+					boardSlot.SetSkillHighlightVisible(visible);
+				}
 			}
 		}
 

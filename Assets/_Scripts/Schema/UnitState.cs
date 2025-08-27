@@ -2,7 +2,7 @@
 // THIS FILE HAS BEEN GENERATED AUTOMATICALLY
 // DO NOT CHANGE IT MANUALLY UNLESS YOU KNOW WHAT YOU'RE DOING
 // 
-// GENERATED USING @colyseus/schema 3.0.56
+// GENERATED USING @colyseus/schema 3.0.59
 // 
 
 using Colyseus.Schema;
@@ -35,5 +35,11 @@ public UnitState() { }
 
 	[Type(6, "number")]
 	public float mana = default(float);
+
+	[Type(7, "number")]
+	public float pips = default(float);
+
+	[Type(8, "number")]
+	public float pipLockUntilTick = default(float);
 }
 

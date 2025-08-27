@@ -203,6 +203,28 @@ namespace ManaGambit
 		public int skillId;
 		public SkillTarget target;
 		public string skillName;
+		public PostImpact postImpact; // optional; used for landing behavior on move skills
+	}
+
+	[Serializable]
+	public class CancelCastPayload
+	{
+		public string unitId;
+		public string castId;
+	}
+
+	[Serializable]
+	public class LeaveMatchPayload
+	{
+		public string reason;
+	}
+
+	[Serializable]
+	public class PostImpact
+	{
+		public string behavior; // ReturnHome | LandNearTarget
+		public int radius;
+		public bool random;
 	}
 
 	[Serializable]
