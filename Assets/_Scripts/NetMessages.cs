@@ -99,6 +99,8 @@ namespace ManaGambit
 		public int result;
 		public int damage;
 		public bool killed;
+		public int hp; // optional; server may include updated hp
+		public bool dead; // optional alias used by server
 	}
 
 	[Serializable]
@@ -108,6 +110,7 @@ namespace ManaGambit
 		public string attacker;
 		public int hitTick;
 		public UseSkillResultTarget[] targets;
+		public int currentPips; // optional; piggybacked for attacker
 	}
 
 	[Serializable]

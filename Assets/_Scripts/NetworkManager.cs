@@ -308,14 +308,22 @@ namespace ManaGambit
 								for (int i = 0; i < res.targets.Length; i++)
 								{
 									var t = res.targets[i];
-									// Minimal: mark killed units for removal
-									if (t != null && t.killed)
+									// Minimal: mark killed units for removal and show hp text if present
+									if (t != null)
 									{
 										var victim = GameManager.Instance.GetUnitById(t.unitId);
 										if (victim != null)
 										{
-											Destroy(victim.gameObject);
-											GameManager.Instance.UnregisterUnit(t.unitId);
+											if (t.killed || t.dead)
+											{
+												victim.ShowEphemeralText("Dead");
+												Destroy(victim.gameObject);
+												GameManager.Instance.UnregisterUnit(t.unitId);
+											}
+											else if (t.hp > 0)
+											{
+												victim.ShowEphemeralText($"HP:{t.hp}");
+											}
 										}
 									}
 								}

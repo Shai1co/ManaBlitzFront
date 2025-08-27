@@ -185,6 +185,32 @@ namespace ManaGambit
             catch { /* ignore icon errors */ }
         }
 
+        public void ShowEphemeralText(string key)
+        {
+            if (string.IsNullOrEmpty(key)) return;
+            // Forward text-only display to UnitStatusIcons via reflection
+            try
+            {
+                var behaviours = GetComponents<MonoBehaviour>();
+                for (int i = 0; i < behaviours.Length; i++)
+                {
+                    var b = behaviours[i];
+                    if (b == null) continue;
+                    var t = b.GetType();
+                    if (t != null && t.Name == "UnitStatusIcons")
+                    {
+                        var mi = t.GetMethod("ShowTextKey", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic);
+                        if (mi != null)
+                        {
+                            mi.Invoke(b, new object[] { key });
+                        }
+                        break;
+                    }
+                }
+            }
+            catch { /* ignore */ }
+        }
+
         public void SetInitialData(UnitServerData data, bool setWorldPosition = false)
         {
             currentPosition = new Vector2Int(data.pos.x, data.pos.y);

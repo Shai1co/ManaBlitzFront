@@ -78,6 +78,20 @@ namespace ManaGambit
 			RepositionIcons();
 		}
 
+		public void HideKey(string statusName)
+		{
+			if (string.IsNullOrEmpty(statusName)) return;
+			Hide(statusName);
+			RepositionIcons();
+		}
+
+		public void ShowTextKey(string statusName)
+		{
+			if (string.IsNullOrEmpty(statusName)) return;
+			Show(statusName);
+			RepositionIcons();
+		}
+
 		private void Show(string statusName)
 		{
 			if (activeByName.ContainsKey(statusName)) return;
