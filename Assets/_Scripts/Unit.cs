@@ -105,8 +105,11 @@ namespace ManaGambit
             }
             finally
             {
-                moveCts.Dispose();
-                moveCts = null;
+                if (moveCts != null)
+                {
+                    moveCts.Dispose();
+                    moveCts = null;
+                }
             }
         }
 
@@ -146,6 +149,8 @@ namespace ManaGambit
             if (moveCts != null)
             {
                 moveCts.Cancel();
+                moveCts.Dispose();
+                moveCts = null;
             }
             // TODO: Stop other actions if any
             Debug.Log($"{name} stopped");

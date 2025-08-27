@@ -65,6 +65,11 @@ namespace ManaGambit
 
 		private void HandleLeftClickUnified()
 		{
+			// Prevent issuing commands through UI elements
+			if (IsPointerOverUI())
+			{
+				return;
+			}
 			Vector2 pointerPos = ReadPointerScreenPosition();
 			if (!IsFinite(pointerPos))
 			{
