@@ -1,5 +1,6 @@
 
 using System;
+using Newtonsoft.Json.Linq;
 
 namespace ManaGambit
 {
@@ -274,5 +275,14 @@ namespace ManaGambit
 		public string type;
 		public int serverTick;
 		public ValidTargetsData data;
+	}
+
+	[Serializable]
+	public class ServerEventEnvelopeRaw
+	{
+		public string type;
+		public string intentId;
+		public int serverTick;
+		public JObject data;
 	}
 }
