@@ -15,8 +15,19 @@ namespace ManaGambit
 		[SerializeField] private TextMeshProUGUI gameOverText;
 		[SerializeField, Tooltip("Default number of seconds to show toast messages")]
 		private int defaultToastSeconds = 3;
+		[SerializeField, Tooltip("Transient toast message surface; separate from persistent status")] private TextMeshProUGUI toastText;
 
 		private System.Threading.CancellationTokenSource toastCts;
+
+		private void CleanupToastCts()
+		{
+			if (toastCts != null)
+			{
+				toastCts.Cancel();
+				toastCts.Dispose();
+				toastCts = null;
+			}
+		}
 
 		private void Awake()
 		{
@@ -29,6 +40,7 @@ namespace ManaGambit
 			HideCountdown();
 			HideStatus();
 			HideGameOver();
+			HideToast();
 		}
 
 		public void ShowStatus(string message, string kind = "info")
@@ -91,20 +103,18 @@ namespace ManaGambit
 
 		public void ShowToast(string message, string kind = "info", int seconds = 0)
 		{
-			// Use statusText as a lightweight toast surface
 			if (seconds <= 0) seconds = Mathf.Max(1, defaultToastSeconds);
-			if (statusText != null)
+			if (toastText != null)
 			{
-				statusText.text = message;
-				statusText.enabled = true;
+				toastText.text = message;
+				toastText.enabled = true;
+			}
+			else
+			{
+				Debug.Log($"[HUD][toast][{kind}] {message}");
 			}
 			// cancel any previous hide task
-			if (toastCts != null)
-			{
-				toastCts.Cancel();
-				toastCts.Dispose();
-				toastCts = null;
-			}
+			CleanupToastCts();
 			toastCts = new System.Threading.CancellationTokenSource();
 			HideToastAfterDelay(seconds, toastCts.Token).Forget();
 		}
@@ -114,9 +124,26 @@ namespace ManaGambit
 			try
 			{
 				await UniTask.Delay(seconds * 1000, cancellationToken: token);
-				if (statusText != null) statusText.enabled = false;
+				HideToast();
 			}
-			catch { /* cancelled */ }
+			catch (System.OperationCanceledException)
+			{
+				// Expected when toast is cancelled
+			}
+			catch (System.Exception ex)
+			{
+				Debug.LogError($"[HUD] Unexpected error in HideToastAfterDelay: {ex}");
+			}
+		}
+
+		public void HideToast()
+		{
+			if (toastText != null) toastText.enabled = false;
+		}
+
+		private void OnDestroy()
+		{
+			CleanupToastCts();
 		}
 
 		public void UpdateMana(string playerId, float mana)

@@ -1,5 +1,6 @@
 
 using Cysharp.Threading.Tasks;
+using System;
 using System.Threading;
 using UnityEngine;
 using HighlightPlus;
@@ -30,7 +31,6 @@ namespace ManaGambit
         private CancellationTokenSource moveCts;
         private const float DefaultMoveDurationSeconds = 1f;
         private const int DefaultBasicActionIndex = 0;
-        private const float DefaultServerTickMs = 33.333f;
 
         public Vector2Int CurrentPosition => currentPosition;
 
@@ -155,7 +155,7 @@ namespace ManaGambit
             {
                 SetState(UnitState.WindUp);
                 // Wait for wind-up duration before the hit occurs
-                await UniTask.Delay(windUpMs);
+                await UniTask.Delay(windUpMs, cancellationToken: this.GetCancellationTokenOnDestroy());
             }
 
             SetState(UnitState.Attacking);
@@ -175,7 +175,7 @@ namespace ManaGambit
             if (use.startTick > 0 && use.endWindupTick > use.startTick)
             {
                 int dt = use.endWindupTick - use.startTick;
-                windUpMs = Mathf.Max(0, Mathf.RoundToInt(dt * DefaultServerTickMs));
+                windUpMs = Mathf.Max(0, Mathf.RoundToInt(dt * NetworkManager.DefaultTickRateMs));
             }
             if (windUpMs <= 0)
             {
@@ -188,7 +188,7 @@ namespace ManaGambit
             if (windUpMs > 0)
             {
                 SetState(UnitState.WindUp);
-                await UniTask.Delay(windUpMs);
+                await UniTask.Delay(windUpMs, cancellationToken: this.GetCancellationTokenOnDestroy());
             }
 
             SetState(UnitState.Attacking);
@@ -198,11 +198,11 @@ namespace ManaGambit
             if (use.hitTick > 0 && use.endWindupTick > 0 && use.hitTick > use.endWindupTick)
             {
                 int dt = use.hitTick - use.endWindupTick;
-                hitDelayMs = Mathf.Max(0, Mathf.RoundToInt(dt * DefaultServerTickMs));
+                hitDelayMs = Mathf.Max(0, Mathf.RoundToInt(dt * NetworkManager.DefaultTickRateMs));
             }
             if (hitDelayMs > 0)
             {
-                await UniTask.Delay(hitDelayMs);
+                await UniTask.Delay(hitDelayMs, cancellationToken: this.GetCancellationTokenOnDestroy());
             }
 
             SetState(UnitState.Idle);
@@ -312,7 +312,7 @@ namespace ManaGambit
             currentPosition = new Vector2Int(data.pos.x, data.pos.y);
             if (setWorldPosition)
             {
-                transform.position = Board.Instance.GetWorldPosition(currentPosition);
+                transform.position = Board.Instance.GetSlotWorldPosition(currentPosition);
             }
             // Initialize HP and MaxHP with robust fallbacks mirroring JS client expectations
             maxHp = data.maxHp;
@@ -325,6 +325,7 @@ namespace ManaGambit
                 if (maxHp <= 0) maxHp = Mathf.Max(1, data.hp); // last resort: use current hp or 1
             }
             currentHp = Mathf.Clamp(data.hp, 0, Mathf.Max(1, maxHp));
+            ApplyHpUpdate(currentHp);
             currentMana = data.mana;
             // TODO: Update UI or other components with hp/mana
         }
@@ -339,7 +340,9 @@ namespace ManaGambit
                 if (icons == null) icons = GetComponentInChildren<UnitStatusIcons>(true);
                 if (icons != null)
                 {
-                    bool isOwn = AuthManager.Instance != null && string.Equals(ownerId, AuthManager.Instance.UserId);
+                    bool isOwn = AuthManager.Instance != null && 
+                                !string.IsNullOrEmpty(AuthManager.Instance.UserId) && 
+                                string.Equals(ownerId, AuthManager.Instance.UserId, StringComparison.Ordinal);
                     icons.SetHp(currentHp, Mathf.Max(1, maxHp), isOwn);
                 }
             }

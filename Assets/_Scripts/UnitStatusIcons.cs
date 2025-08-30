@@ -254,14 +254,11 @@ namespace ManaGambit
 			{
 				// Ensure text is disabled when hidden (for text-only mode)
 				var tmpUgui = go.GetComponentInChildren<TextMeshProUGUI>(true);
-				if (tmpUgui == null && container != null) tmpUgui = container.GetComponentInChildren<TextMeshProUGUI>(true);
 				if (tmpUgui != null) tmpUgui.enabled = false;
 				var tmp = go.GetComponentInChildren<TextMeshPro>(true);
-				if (tmp == null && container != null) tmp = container.GetComponentInChildren<TextMeshPro>(true);
 				if (tmp != null) tmp.enabled = false;
 				Destroy(go);
-			}
-			activeByName.Remove(statusName);
+			}			activeByName.Remove(statusName);
 		}
 
 		private void RepositionIcons()

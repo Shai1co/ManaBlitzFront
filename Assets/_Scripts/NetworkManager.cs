@@ -7,6 +7,7 @@ using UnityEngine.Networking;
 using Newtonsoft.Json.Linq;
 using System.Collections.Generic;
 using System;
+using System.Threading;
 
 namespace ManaGambit
 {
@@ -16,10 +17,14 @@ namespace ManaGambit
 		private const string JoinQueuePath = "queue/join";
 		private const string ConfigPath = "config";
 		private const string IntentChannel = "Intent"; // Match JS client/server message type
-		private const float ReconnectInitialDelaySeconds = 0.5f; // no magic numbers
-		private const float ReconnectMaxDelaySeconds = 8f;
+		private const float ReconnectInitialDelaySeconds = (15f * DefaultTickRateMs) / 1000f; // 15 ticks
+		private const float ReconnectMaxDelaySeconds = (240f * DefaultTickRateMs) / 1000f; // 240 ticks
 		private const int ReconnectMaxAttempts = 3;
+		private const int ReconnectingFalse = 0; // for atomic gate
+		private const int ReconnectingTrue = 1;  // for atomic gate
 		public static NetworkManager Instance { get; private set; }
+
+		public const float DefaultTickRateMs = 33.333f; // Centralized server tick rate
 
 		private static readonly Vector3 BoardSpawnOffset = new Vector3(4f, 0f, 4f);
 
@@ -34,7 +39,9 @@ namespace ManaGambit
 		private ReconnectionToken lastReconnectionToken;
 		private bool isRoomOpen;
 		private bool isReconnecting;
+		private int reconnectingGate = ReconnectingFalse;
 		private int reconnectAttempts;
+		private CancellationTokenSource _reconnectCts;
 
 		[SerializeField] private UnitConfig unitConfig;  // Assign in Inspector
 		[SerializeField] private bool verboseNetworkLogging = false;
@@ -54,6 +61,30 @@ namespace ManaGambit
 		public string MatchId { get; private set; }
 		public string RulesHash { get; private set; }
 
+		/// <summary>
+		/// Deserializes event data from JSON with error handling
+		/// </summary>
+		/// <typeparam name="T">The type to deserialize to</typeparam>
+		/// <param name="data">The data to deserialize</param>
+		/// <returns>The deserialized object or null if deserialization fails</returns>
+		private T DeserializeEventData<T>(object data) where T : class
+		{
+			if (data == null)
+			{
+				return null;
+			}
+
+			try
+			{
+				return JObject.FromObject(data).ToObject<T>();
+			}
+			catch (System.Exception ex)
+			{
+				Debug.LogWarning($"{LogTag} Failed to deserialize {typeof(T).Name}: {ex.Message}");
+				return null;
+			}
+		}
+
 		private void Awake()
 		{
 			if (Instance != null && Instance != this)
@@ -62,6 +93,9 @@ namespace ManaGambit
 				return;
 			}
 			Instance = this;
+			
+			// Initialize cancellation token source for reconnection attempts
+			_reconnectCts = new CancellationTokenSource();
 		}
 
 		public async UniTask<bool> FetchConfig()
@@ -312,6 +346,11 @@ namespace ManaGambit
 		{
 			try
 			{
+				// Cancel any ongoing reconnection attempts
+				_reconnectCts?.Cancel();
+				_reconnectCts?.Dispose();
+				_reconnectCts = null;
+				
 				if (room != null)
 				{
 					await room.Leave();
@@ -432,9 +471,8 @@ namespace ManaGambit
 				{
 					if (moveData.startTick > 0 && moveData.endTick > moveData.startTick)
 					{
-						const float defaultTickLenMs = 33.333f;
 						int dt = moveData.endTick - moveData.startTick;
-						durationSeconds = Mathf.Max(0.033f, (dt * defaultTickLenMs) / 1000f);
+						durationSeconds = Mathf.Max(DefaultTickRateMs / 1000f, (dt * DefaultTickRateMs) / 1000f);
 					}
 				}
 				catch { durationSeconds = 0f; }
@@ -596,63 +634,45 @@ namespace ManaGambit
 				switch (envelope.type)
 				{
 					case "Move":
-						if (envelope.data != null)
-						{
-							try
-							{
-								var move = envelope.data != null ? JObject.FromObject(envelope.data).ToObject<MoveData>() : null;
-								if (move != null) { HandleMove(move); if (!string.IsNullOrEmpty(envelope.intentId) && IntentManager.Instance != null) IntentManager.Instance.HandleIntentResponse(envelope.intentId); }
-							}
-							catch (System.Exception ex)
-							{
-								Debug.LogWarning($"{LogTag} Failed to parse ServerEvent.Move: {ex.Message}");
-							}
-						}
+						var move = DeserializeEventData<MoveData>(envelope.data);
+						if (move != null) { HandleMove(move); if (!string.IsNullOrEmpty(envelope.intentId) && IntentManager.Instance != null) IntentManager.Instance.HandleIntentResponse(envelope.intentId); }
 						break;
 					case "UseSkill":
-						try
+						var use = DeserializeEventData<UseSkillData>(envelope.data);
+						if (use != null && !string.IsNullOrEmpty(use.unitId))
 						{
-							var use = envelope.data != null ? JObject.FromObject(envelope.data).ToObject<UseSkillData>() : null;
-							if (use != null && !string.IsNullOrEmpty(use.unitId))
+							var unit = GameManager.Instance.GetUnitById(use.unitId);
+							if (unit != null)
 							{
-								var unit = GameManager.Instance.GetUnitById(use.unitId);
-								if (unit != null)
-								{
-									unit.PlayUseSkill(use).Forget();
-								}
+								unit.PlayUseSkill(use).Forget();
 							}
 						}
-						catch (System.Exception) { /* ignore */ }
 						break;
 					case "UseSkillResult":
-						try
+						var res = DeserializeEventData<UseSkillResultData>(envelope.data);
+						if (res != null && res.targets != null)
 						{
-							var res = envelope.data != null ? JObject.FromObject(envelope.data).ToObject<UseSkillResultData>() : null;
-							if (res != null && res.targets != null)
+							for (int i = 0; i < res.targets.Length; i++)
 							{
-								for (int i = 0; i < res.targets.Length; i++)
+								var t = res.targets[i];
+								if (t == null) continue;
+								var victim = !string.IsNullOrEmpty(t.unitId) ? GameManager.Instance.GetUnitById(t.unitId) : null;
+								if (victim != null)
 								{
-									var t = res.targets[i];
-									if (t == null) continue;
-									var victim = !string.IsNullOrEmpty(t.unitId) ? GameManager.Instance.GetUnitById(t.unitId) : null;
-									if (victim != null)
+									if (t.damage > 0) victim.ShowDamageNumber(t.damage);
+									victim.PlayHitFlash();
+									int nextHp = t.hp > 0 ? t.hp : Mathf.Max(0, victim.CurrentHp - Mathf.Max(0, t.damage));
+									victim.ApplyHpUpdate(nextHp);
+									if (t.killed || t.dead || nextHp <= 0)
 									{
-										if (t.damage > 0) victim.ShowDamageNumber(t.damage);
-										victim.PlayHitFlash();
-										int nextHp = t.hp > 0 ? t.hp : Mathf.Max(0, victim.CurrentHp - Mathf.Max(0, t.damage));
-										victim.ApplyHpUpdate(nextHp);
-										if (t.killed || t.dead || nextHp <= 0)
-										{
-											Board.Instance.ClearOccupied(victim.CurrentPosition, victim);
-											UnityEngine.Object.Destroy(victim.gameObject);
-											GameManager.Instance.UnregisterUnit(t.unitId);
-										}
+										Board.Instance.ClearOccupied(victim.CurrentPosition, victim);
+										UnityEngine.Object.Destroy(victim.gameObject);
+										GameManager.Instance.UnregisterUnit(t.unitId);
 									}
 								}
-								if (!string.IsNullOrEmpty(envelope.intentId) && IntentManager.Instance != null) IntentManager.Instance.HandleIntentResponse(envelope.intentId);
 							}
+							if (!string.IsNullOrEmpty(envelope.intentId) && IntentManager.Instance != null) IntentManager.Instance.HandleIntentResponse(envelope.intentId);
 						}
-						catch (System.Exception) { /* ignore */ }
 						break;
 					default:
 						if (verboseNetworkLogging)
@@ -793,37 +813,55 @@ namespace ManaGambit
 
 		private async UniTaskVoid TryAutoReconnect()
 		{
-			if (isReconnecting) return;
-			if (colyseusClient == null || lastReconnectionToken == null)
-			{
-				Debug.LogWarning($"{LogTag} Cannot auto-reconnect: missing client or token");
-				return;
-			}
+			// Atomic coalescing to ensure only one reconnect routine runs at a time
+			if (Interlocked.CompareExchange(ref reconnectingGate, ReconnectingTrue, ReconnectingFalse) != ReconnectingFalse) return;
 			isReconnecting = true;
-			float delay = ReconnectInitialDelaySeconds;
-			while (reconnectAttempts < ReconnectMaxAttempts)
+			
+			// Create and link cancellation token source
+			_reconnectCts?.Cancel();
+			_reconnectCts?.Dispose();
+			_reconnectCts = new CancellationTokenSource();
+			
+			try
 			{
-				reconnectAttempts++;
-				Debug.Log($"{LogTag} Attempting reconnect {reconnectAttempts}/{ReconnectMaxAttempts} after {delay:0.##}s...");
-				await UniTask.Delay((int)(delay * 1000f));
-				try
+				if (colyseusClient == null || lastReconnectionToken == null)
 				{
-					await Reconnect();
-					isRoomOpen = true;
-					isReconnecting = false;
-					Debug.Log($"{LogTag} Reconnect successful.");
-					if (HudController.Instance != null) HudController.Instance.ShowToast("Reconnected", "info", 2);
+					Debug.LogWarning($"{LogTag} Cannot auto-reconnect: missing client or token");
 					return;
 				}
-				catch (System.Exception ex)
+				float delay = ReconnectInitialDelaySeconds;
+				while (reconnectAttempts < ReconnectMaxAttempts)
 				{
-					Debug.LogWarning($"{LogTag} Reconnect attempt {reconnectAttempts} failed: {ex.Message}");
+					_reconnectCts.Token.ThrowIfCancellationRequested();
+					reconnectAttempts++;
+					Debug.Log($"{LogTag} Attempting reconnect {reconnectAttempts}/{ReconnectMaxAttempts} after {delay:0.##}s...");
+					await UniTask.Delay((int)(delay * 1000f), cancellationToken: _reconnectCts.Token);
+					try
+					{
+						await Reconnect();
+						isRoomOpen = true;
+						Debug.Log($"{LogTag} Reconnect successful.");
+						if (HudController.Instance != null) HudController.Instance.ShowToast("Reconnected", "info", 2);
+						return;
+					}
+					catch (System.Exception ex)
+					{
+						Debug.LogWarning($"{LogTag} Reconnect attempt {reconnectAttempts} failed: {ex.Message}");
+					}
+					delay = Mathf.Min(delay * 2f, ReconnectMaxDelaySeconds);
 				}
-				delay = Mathf.Min(delay * 2f, ReconnectMaxDelaySeconds);
+				Debug.LogWarning($"{LogTag} Max reconnect attempts reached. Please try manually.");
+				if (HudController.Instance != null) HudController.Instance.ShowToast("Disconnected", "error", 3);
 			}
-			isReconnecting = false;
-			Debug.LogWarning($"{LogTag} Max reconnect attempts reached. Please try manually.");
-			if (HudController.Instance != null) HudController.Instance.ShowToast("Disconnected", "error", 3);
+			catch (OperationCanceledException)
+			{
+				Debug.Log($"{LogTag} Reconnection cancelled");
+			}
+			finally
+			{
+				isReconnecting = false;
+				Volatile.Write(ref reconnectingGate, ReconnectingFalse);
+			}
 		}
 	}
 }

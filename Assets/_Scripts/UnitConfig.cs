@@ -83,6 +83,7 @@ namespace ManaGambit
 			public int interval;
 			public int duration;
 			public bool requireLos;
+			public bool allowFriendlyTarget;
 		}
 
 		[System.Serializable]
@@ -398,6 +399,8 @@ namespace ManaGambit
 			e.interval = obj["interval"]?.Value<int?>() ?? 0;
 			e.duration = obj["duration"]?.Value<int?>() ?? 0;
 			e.requireLos = obj["requireLos"]?.Value<bool?>() ?? false;
+			// Support both "allowFriendlyTarget" and "targetFriendly" JSON keys for consistency with MoveEffect/SwapEffect
+			e.allowFriendlyTarget = obj["allowFriendlyTarget"]?.Value<bool?>() ?? obj["targetFriendly"]?.Value<bool?>() ?? false;
 			return e;
 		}
 

@@ -106,47 +106,21 @@ namespace ManaGambit
 					// If targeting a skill and clicked an enemy unit that is a valid target, cast instead of selecting
 					if (isTargetingSkill && targetingUnit != null)
 					{
-						bool isOwnTarget = AuthManager.Instance != null && string.Equals(unit.OwnerId, AuthManager.Instance.UserId);
-						if (!isOwnTarget)
+						if (TryExecuteSkillOnUnit(targetingUnit, unit, pendingSkillIndex))
 						{
-							var targetCell = unit.CurrentPosition;
-							var cfg = NetworkManager.Instance != null ? NetworkManager.Instance.UnitConfigAsset : null;
-							if (cfg != null)
-							{
-								var skillTargets = LocalTargeting.ComputeSkillTargets(targetingUnit, cfg, Mathf.Max(0, pendingSkillIndex));
-								if (skillTargets.Contains(targetCell))
-								{
-									if (debugInput) Debug.Log($"[ClickInput] Enemy unit clicked is valid skill target; sending UseSkill to {targetCell}");
-									var target = new SkillTarget { cell = new Pos { x = targetCell.x, y = targetCell.y } };
-									_ = IntentManager.Instance?.SendUseSkillIntent(targetingUnit.UnitID, pendingSkillIndex, target);
-									isTargetingSkill = false;
-									pendingSkillIndex = -1;
-									Board.Instance.ClearSkillHighlights();
-									return;
-								}
-							}
+							isTargetingSkill = false;
+							pendingSkillIndex = -1;
+							Board.Instance.ClearSkillHighlights();
+							return;
 						}
 					}
 					// If not explicitly targeting a skill, mirror JS: use default skill (index 0) on enemy click when valid
 					if (!isTargetingSkill && selectedUnit != null)
 					{
-						bool isOwnTarget = AuthManager.Instance != null && string.Equals(unit.OwnerId, AuthManager.Instance.UserId);
-						if (!isOwnTarget)
+						const int defaultSkillIndex = 0;
+						if (TryExecuteSkillOnUnit(selectedUnit, unit, defaultSkillIndex))
 						{
-							var cfg = NetworkManager.Instance != null ? NetworkManager.Instance.UnitConfigAsset : null;
-							if (cfg != null)
-							{
-								const int defaultSkillIndex = 0;
-								var defaultTargets = LocalTargeting.ComputeSkillTargets(selectedUnit, cfg, defaultSkillIndex);
-								var enemyCell = unit.CurrentPosition;
-								if (defaultTargets.Contains(enemyCell))
-								{
-									if (debugInput) Debug.Log($"[ClickInput] Enemy unit clicked is valid default skill target; sending UseSkill index=0 to {enemyCell}");
-									var target = new SkillTarget { cell = new Pos { x = enemyCell.x, y = enemyCell.y } };
-									_ = IntentManager.Instance?.SendUseSkillIntent(selectedUnit.UnitID, defaultSkillIndex, target);
-									return;
-								}
-							}
+							return;
 						}
 					}
 					HandleUnitClick(unit);
@@ -264,7 +238,9 @@ namespace ManaGambit
 			var coords = new List<Vector2Int>(count);
 			for (int i = 0; i < count; i++)
 			{
-				var cell = evt.data.targets[i]?.cell;
+				var target = evt.data.targets[i];
+				if (target == null) continue;
+				var cell = target.cell;
 				if (cell == null) continue;
 				var v = new Vector2Int(cell.x, cell.y);
 				coords.Add(v);
@@ -411,21 +387,37 @@ namespace ManaGambit
 			return true;
 		}
 
+		private bool IsSlotEmpty(Vector2Int coord)
+		{
+			if (!Board.Instance.TryGetBoardSlot(coord, out var bs) || bs == null)
+				return false; // unknown slot => do not treat as empty
+			return !bs.IsOccupied;
+		}
+
+		private bool ShouldPreferMoveOverSkill(Vector2Int coord)
+		{
+			// Check if the target cell is empty
+			if (!IsSlotEmpty(coord)) return false;
+			
+			// Check if it's also a valid move target for the selected unit
+			if (selectedUnit == null || NetworkManager.Instance?.UnitConfigAsset == null) return false;
+			
+			var legalMoveTargets = LocalTargeting.ComputeMoveTargets(selectedUnit, NetworkManager.Instance.UnitConfigAsset);
+			return legalMoveTargets.Contains(coord);
+		}
+
 		private bool TryIssueSkillAtSlot(Transform slot)
 		{
 			if (!isTargetingSkill || slot == null || targetingUnit == null) return false;
 			if (!Board.Instance.TryGetCoord(slot, out var toCoord)) return false;
+			
 			// JS behavior: if empty and also a valid move target, prefer moving instead of casting
-			bool isEmpty = !(Board.Instance.TryGetBoardSlot(toCoord, out var bs) && bs != null && bs.IsOccupied);
-			if (isEmpty && selectedUnit != null && NetworkManager.Instance != null && NetworkManager.Instance.UnitConfigAsset != null)
+			if (ShouldPreferMoveOverSkill(toCoord))
 			{
-				var legalMoves = LocalTargeting.ComputeMoveTargets(selectedUnit, NetworkManager.Instance.UnitConfigAsset);
-				if (legalMoves.Contains(toCoord))
-				{
-					if (debugInput) Debug.Log($"[ClickInput] Target cell empty and valid move; issuing Move to {toCoord}");
-					return TryIssueMoveToSlot(slot);
-				}
+				if (debugInput) Debug.Log($"[ClickInput] Target cell empty and valid move; issuing Move to {toCoord}");
+				return TryIssueMoveToSlot(slot);
 			}
+			
 			if (IntentManager.Instance != null && !string.IsNullOrEmpty(targetingUnit.UnitID))
 			{
 				if (debugInput) Debug.Log($"[ClickInput] Send UseSkill unit={targetingUnit.UnitID} skillIndex={pendingSkillIndex} target=({toCoord.x},{toCoord.y})");
@@ -532,26 +524,56 @@ namespace ManaGambit
 		private static void SetUnitSelectionHighlight(Unit unit, bool highlighted)
 		{
 			if (unit == null) return;
-			try
+			
+			var effect = unit.GetComponentInChildren<HighlightEffect>(true);
+			if (effect == null) return;
+			
+			effect.SetHighlighted(highlighted);
+		}
+
+		private bool TryExecuteSkillOnUnit(Unit caster, Unit target, int skillIndex)
+		{
+			if (caster == null || target == null) return false;
+
+			// Check if target is an enemy unit (relative to caster, not local user)
+			bool isEnemyUnit = !string.Equals(target.OwnerId, caster.OwnerId);
+			if (!isEnemyUnit) 
 			{
-				var effect = unit.GetComponentInChildren<HighlightEffect>(true);
-				if (effect != null)
-				{
-					effect.SetHighlighted(highlighted);
-				}
+				if (debugInput) Debug.Log($"[ClickInput] Target {target.UnitID} is not an enemy of caster {caster.UnitID} (target owner: {target.OwnerId}, caster owner: {caster.OwnerId})");
+				return false;
 			}
-			catch { }
+
+			var cfg = NetworkManager.Instance?.UnitConfigAsset;
+			if (cfg == null) return false;
+
+			var targetCell = target.CurrentPosition;
+			var skillTargets = LocalTargeting.ComputeSkillTargets(caster, cfg, skillIndex);
+
+			if (skillTargets.Contains(targetCell))
+			{
+				// Guard: ensure caster has valid UnitID and IntentManager is available
+				if (string.IsNullOrEmpty(caster.UnitID))
+				{
+					if (debugInput) Debug.Log($"[ClickInput] Cannot send skill intent: caster {caster.name} has empty UnitID");
+					return false;
+				}
+				
+				if (IntentManager.Instance == null)
+				{
+					if (debugInput) Debug.Log($"[ClickInput] Cannot send skill intent: IntentManager.Instance is null");
+					return false;
+				}
+
+				if (debugInput) Debug.Log($"[ClickInput] Enemy unit {target.UnitID} clicked is valid skill target for caster {caster.UnitID}; sending UseSkill to {targetCell} with skillIndex {skillIndex}");
+				var skillTarget = new SkillTarget { cell = new Pos { x = targetCell.x, y = targetCell.y } };
+				_ = IntentManager.Instance.SendUseSkillIntent(caster.UnitID, skillIndex, skillTarget);
+				return true;
+			}
+			
+			if (debugInput) Debug.Log($"[ClickInput] Target cell {targetCell} is not a valid skill target for caster {caster.UnitID} with skill {skillIndex}");
+			return false;
 		}
 
-		private string UnitConfigPieceIdOf(Unit unit)
-		{
-			// Not needed for server flow; left for future mapping
-			return null;
-		}
 
-		private string FirstActionName(string pieceId)
-		{
-			return null;
-		}
 	}
 }

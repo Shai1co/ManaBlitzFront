@@ -14,6 +14,7 @@ namespace ManaGambit
 
 		private Unit boundUnit;
 		private int actionIndex;
+		private ManaGambit.ClickInput _clickInput;
 
 		public void Setup(Unit unit, int index, UnitConfig.ActionInfo info)
 		{
@@ -34,7 +35,7 @@ namespace ManaGambit
 		private void OnClick()
 		{
 			if (boundUnit == null) return;
-			var input = FindFirstObjectByType<ManaGambit.ClickInput>();
+			var input = _clickInput;
 			if (input != null && input.BeginSkillTargeting(boundUnit, actionIndex)) return;
 			// Fallback: send immediately if input targeting not available
 			if (IntentManager.Instance != null && !string.IsNullOrEmpty(boundUnit.UnitID))
@@ -42,6 +43,11 @@ namespace ManaGambit
 				var target = new SkillTarget();
 				_ = IntentManager.Instance.SendUseSkillIntent(boundUnit.UnitID, actionIndex, target);
 			}
+		}
+
+		private void Awake()
+		{
+			_clickInput = FindFirstObjectByType<ManaGambit.ClickInput>();
 		}
 	}
 }

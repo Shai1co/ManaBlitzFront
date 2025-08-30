@@ -1,6 +1,7 @@
 
 using System;
 using GameDevWare.Serialization;
+using Newtonsoft.Json.Linq;
 
 namespace ManaGambit
 {
@@ -249,10 +250,82 @@ namespace ManaGambit
 		public BoardData board;
 		// public Dictionary<string, float> playerMana; // not used now
 		// NOTE: server currently sends 'countdown' as a string token instead of an object
-		// Matching the old schema here causes deserialization to fail with
-		// "Unexpected token read 'StringLiteral' while 'BeginObject' is expected".
-		// Temporarily disable strict typing for countdown to accept messages.
-		// public Countdown countdown;
+		// Using loose-typed field to accept both string and object tokens
+		public object countdown;
+
+		/// <summary>
+		/// Attempts to safely convert the countdown field to a Countdown instance.
+		/// Handles both string tokens (ignores them) and object tokens (deserializes to Countdown).
+		/// </summary>
+		/// <param name="countdown">The resulting Countdown instance if conversion succeeds</param>
+		/// <returns>True if a valid Countdown was extracted, false otherwise</returns>
+		public bool TryGetCountdown(out Countdown countdown)
+		{
+			countdown = null;
+			
+			if (this.countdown == null)
+				return false;
+
+			// If it's already a Countdown object, return it directly
+			if (this.countdown is Countdown existingCountdown)
+			{
+				countdown = existingCountdown;
+				return true;
+			}
+
+			// If it's a JToken, handle based on its type
+			if (this.countdown is JToken token)
+			{
+				switch (token.Type)
+				{
+					case JTokenType.String:
+						// String tokens are ignored (as per the original comment)
+						return false;
+					case JTokenType.Object:
+						try
+						{
+							countdown = token.ToObject<Countdown>();
+							return countdown != null;
+						}
+						catch
+						{
+							return false;
+						}
+					default:
+						return false;
+				}
+			}
+
+			// If it's a plain object, try to convert it
+			try
+			{
+				if (this.countdown is string)
+				{
+					// String values are ignored
+					return false;
+				}
+				
+				// Try to convert using JsonConvert
+				var jsonString = Newtonsoft.Json.JsonConvert.SerializeObject(this.countdown);
+				countdown = Newtonsoft.Json.JsonConvert.DeserializeObject<Countdown>(jsonString);
+				return countdown != null;
+			}
+			catch
+			{
+				return false;
+			}
+		}
+
+		/// <summary>
+		/// Gets the countdown value if available, otherwise returns null.
+		/// This is a simpler accessor that doesn't throw exceptions.
+		/// </summary>
+		/// <returns>The Countdown instance if valid, null otherwise</returns>
+		public Countdown GetCountdown()
+		{
+			TryGetCountdown(out Countdown result);
+			return result;
+		}
 	}
 
 	[Serializable]

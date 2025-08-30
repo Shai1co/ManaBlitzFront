@@ -18,8 +18,14 @@ namespace ManaGambit
 		[SerializeField] private bool debugIcons = false;
 
 		private Dictionary<string, Sprite> iconLookup;
+		private Dictionary<string, string> canonicalCache;
+
+		[System.ThreadStatic]
+		private static System.Text.StringBuilder canonicalStringBuilder;
 
 		private Unit boundUnit;
+		private bool isSubscribedToManaEvents = false;
+		private ClickInput cachedClickInput;
 
 		private void Awake()
 		{
@@ -31,6 +37,9 @@ namespace ManaGambit
 			}
 			AutoWireSlotsIfNeeded();
 			ResetSlots();
+			
+			// Cache ClickInput reference to avoid FindFirstObjectByType calls
+			cachedClickInput = FindFirstObjectByType<ClickInput>();
 		}
 
 		private void OnValidate()
@@ -40,12 +49,39 @@ namespace ManaGambit
 
 		private void OnEnable()
 		{
-			ManaBarUI.OnManaChanged += HandleManaChanged;
+			TrySubscribeToManaEvents();
 		}
 
 		private void OnDisable()
 		{
-			ManaBarUI.OnManaChanged -= HandleManaChanged;
+			UnsubscribeFromManaEvents();
+		}
+
+		private void Update()
+		{
+			// Handle late initialization if ManaBarUI.Instance becomes available after OnEnable
+			if (!isSubscribedToManaEvents && ManaBarUI.Instance != null)
+			{
+				TrySubscribeToManaEvents();
+			}
+		}
+
+		private void TrySubscribeToManaEvents()
+		{
+			if (!isSubscribedToManaEvents && ManaBarUI.Instance != null)
+			{
+				ManaBarUI.Instance.OnManaChanged += HandleManaChanged;
+				isSubscribedToManaEvents = true;
+			}
+		}
+
+		private void UnsubscribeFromManaEvents()
+		{
+			if (isSubscribedToManaEvents && ManaBarUI.Instance != null)
+			{
+				ManaBarUI.Instance.OnManaChanged -= HandleManaChanged;
+				isSubscribedToManaEvents = false;
+			}
 		}
 
 		public void BindUnit(Unit unit)
@@ -69,7 +105,25 @@ namespace ManaGambit
 			// Ensure config is populated
 			if ((cfg.units == null || cfg.units.Length == 0))
 			{
-				try { cfg.LoadFromJson(); } catch { }
+				try 
+				{ 
+					cfg.LoadFromJson(); 
+				} 
+				catch (System.IO.IOException ex)
+				{
+					Debug.LogError($"[SkillBarUI] Failed to load UnitConfig from JSON due to I/O error: {ex.Message}");
+					// Continue with current flow for I/O errors (file not found, access denied, etc.)
+				}
+				catch (System.ArgumentException ex)
+				{
+					Debug.LogError($"[SkillBarUI] Failed to load UnitConfig from JSON due to invalid argument: {ex.Message}");
+					// Continue with current flow for argument errors (invalid JSON format, etc.)
+				}
+				catch (System.Exception ex)
+				{
+					Debug.LogError($"[SkillBarUI] Failed to load UnitConfig from JSON due to unexpected error: {ex.Message}\nStack trace: {ex.StackTrace}");
+					// Continue with current flow for other recoverable errors
+				}
 				if (debugIcons) Debug.Log("[SkillBarUI] UnitConfig was empty; attempted LoadFromJson().");
 			}
 			var data = cfg.GetData(boundUnit.PieceId);
@@ -236,6 +290,8 @@ namespace ManaGambit
 		{
 			if (iconLookup == null) iconLookup = new Dictionary<string, Sprite>(32, System.StringComparer.OrdinalIgnoreCase);
 			else iconLookup.Clear();
+			if (canonicalCache == null) canonicalCache = new Dictionary<string, string>(32, System.StringComparer.OrdinalIgnoreCase);
+			else canonicalCache.Clear();
 			if (iconLibrary == null || iconLibrary.Length == 0) return;
 			for (int i = 0; i < iconLibrary.Length; i++)
 			{
@@ -248,6 +304,7 @@ namespace ManaGambit
 					var normalized = NormalizeKey(key);
 					if (!string.IsNullOrEmpty(normalized)) iconLookup[normalized] = s;
 					var canonical = CanonicalKey(key);
+					canonicalCache[key] = canonical;
 					if (!string.IsNullOrEmpty(canonical)) iconLookup[canonical] = s;
 					// Also precompute common prefixed forms to maximize hit rate
 					if (!string.IsNullOrEmpty(normalized))
@@ -289,7 +346,12 @@ namespace ManaGambit
 				Sprite fuzzy = null;
 				foreach (var kv in iconLookup)
 				{
-					var kcanon = CanonicalKey(kv.Key);
+					// Use cached canonical form if available, otherwise compute it
+					if (!canonicalCache.TryGetValue(kv.Key, out var kcanon))
+					{
+						kcanon = CanonicalKey(kv.Key);
+						canonicalCache[kv.Key] = kcanon;
+					}
 					if (string.IsNullOrEmpty(kcanon)) continue;
 					if (kcanon == canonical || kcanon.Contains(canonical) || canonical.Contains(kcanon))
 					{
@@ -344,16 +406,27 @@ namespace ManaGambit
 		{
 			if (string.IsNullOrEmpty(key)) return null;
 			var lower = key.Trim().ToLowerInvariant();
-			System.Text.StringBuilder sb = new System.Text.StringBuilder(lower.Length);
+			
+			// Ensure thread-static StringBuilder is allocated
+			if (canonicalStringBuilder == null)
+			{
+				canonicalStringBuilder = new System.Text.StringBuilder(lower.Length);
+			}
+			else
+			{
+				canonicalStringBuilder.Clear();
+				canonicalStringBuilder.EnsureCapacity(lower.Length);
+			}
+			
 			for (int i = 0; i < lower.Length; i++)
 			{
 				char c = lower[i];
 				if ((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9'))
 				{
-					sb.Append(c);
+					canonicalStringBuilder.Append(c);
 				}
 			}
-			return sb.ToString();
+			return canonicalStringBuilder.ToString();
 		}
 
 		private UnitConfig.UnitData FindUnitDataFallback(UnitConfig cfg, string pieceId)
@@ -387,8 +460,7 @@ namespace ManaGambit
 		private void OnSkillClicked(int actionIndex)
 		{
 			if (boundUnit == null) return;
-			var input = FindFirstObjectByType<ClickInput>();
-			if (input != null && input.BeginSkillTargeting(boundUnit, actionIndex)) return;
+			if (cachedClickInput != null && cachedClickInput.BeginSkillTargeting(boundUnit, actionIndex)) return;
 			// Fallback: send immediately if input targeting not available
 			if (IntentManager.Instance != null && !string.IsNullOrEmpty(boundUnit.UnitID))
 			{
