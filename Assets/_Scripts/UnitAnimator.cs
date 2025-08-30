@@ -50,6 +50,7 @@ namespace ManaGambit
                     TryPlayState(AttackStateName);
                     break;
             }
+            Debug.Log($"{name} UnitAnimator SetState {state}");
         }
 
         private bool TryPlayState(string stateName)

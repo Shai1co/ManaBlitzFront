@@ -34,8 +34,9 @@ namespace ManaGambit
 		private void OnClick()
 		{
 			if (boundUnit == null) return;
-			// For now, send UseSkill intent with selected unit and action index at its current target selection flow
-			// Hook into your selection/targeting system as needed
+			var input = FindFirstObjectByType<ManaGambit.ClickInput>();
+			if (input != null && input.BeginSkillTargeting(boundUnit, actionIndex)) return;
+			// Fallback: send immediately if input targeting not available
 			if (IntentManager.Instance != null && !string.IsNullOrEmpty(boundUnit.UnitID))
 			{
 				var target = new SkillTarget();

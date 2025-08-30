@@ -12,7 +12,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 268899c761707ee489d987a86fe3b914, type: 3}
   m_Name: UnitConfig
   m_EditorClassIdentifier: Assembly-CSharp::ManaGambit.UnitConfig
-  jsonAsset: {fileID: 4900000, guid: 079f6b791afc09840b51aca493bdd37a, type: 3}
+  jsonAsset: {fileID: 4900000, guid: 899461d634d06ab47a2c7b8a718f0a64, type: 3}
   loadOnEnable: 1
   units:
   - pieceId: Knight
@@ -479,7 +479,7 @@ MonoBehaviour:
       attack:
         damage: 1
         damageType: physical
-        speed: 10
+        speed: 8
         patterns:
         - dir: any
           rangeMin: 1
@@ -507,7 +507,7 @@ MonoBehaviour:
           speedReduction: 0
           duration: 0
         amount: 6
-        interval: 120
+        interval: 250
         duration: 0
         requireLos: 0
       move:
@@ -744,7 +744,7 @@ MonoBehaviour:
       cooldownMs: 10000
       manaCost: 3
       attack:
-        damage: 0
+        damage: 2
         damageType: magic
         speed: 0
         patterns:
@@ -764,8 +764,8 @@ MonoBehaviour:
           dir: any
           range: 1
         aoeDamage:
-          center: 2
-          adjacent: 2
+          center: 0
+          adjacent: 0
         dot:
           damage: 0
           interval: 0
@@ -773,9 +773,9 @@ MonoBehaviour:
         debuff:
           speedReduction: 0
           duration: 0
-        amount: 0
-        interval: 0
-        duration: 0
+        amount: 9
+        interval: 200
+        duration: 300
         requireLos: 0
       move:
         manaCost: 0

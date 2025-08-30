@@ -1,5 +1,7 @@
+using TMPro;
 using UnityEngine;
 using UnityEngine.UI;
+using Cysharp.Threading.Tasks;
 
 namespace ManaGambit
 {
@@ -7,10 +9,14 @@ namespace ManaGambit
 	{
 		public static HudController Instance { get; private set; }
 
-		[SerializeField] private Text statusText;
-		[SerializeField] private Text countdownText;
+		[SerializeField] private TextMeshProUGUI statusText;
+		[SerializeField] private TextMeshProUGUI countdownText;
 		[SerializeField] private GameObject gameOverPanel;
-		[SerializeField] private Text gameOverText;
+		[SerializeField] private TextMeshProUGUI gameOverText;
+		[SerializeField, Tooltip("Default number of seconds to show toast messages")]
+		private int defaultToastSeconds = 3;
+
+		private System.Threading.CancellationTokenSource toastCts;
 
 		private void Awake()
 		{
@@ -81,6 +87,36 @@ namespace ManaGambit
 		public void HideGameOver()
 		{
 			if (gameOverPanel != null) gameOverPanel.SetActive(false);
+		}
+
+		public void ShowToast(string message, string kind = "info", int seconds = 0)
+		{
+			// Use statusText as a lightweight toast surface
+			if (seconds <= 0) seconds = Mathf.Max(1, defaultToastSeconds);
+			if (statusText != null)
+			{
+				statusText.text = message;
+				statusText.enabled = true;
+			}
+			// cancel any previous hide task
+			if (toastCts != null)
+			{
+				toastCts.Cancel();
+				toastCts.Dispose();
+				toastCts = null;
+			}
+			toastCts = new System.Threading.CancellationTokenSource();
+			HideToastAfterDelay(seconds, toastCts.Token).Forget();
+		}
+
+		private async UniTaskVoid HideToastAfterDelay(int seconds, System.Threading.CancellationToken token)
+		{
+			try
+			{
+				await UniTask.Delay(seconds * 1000, cancellationToken: token);
+				if (statusText != null) statusText.enabled = false;
+			}
+			catch { /* cancelled */ }
 		}
 
 		public void UpdateMana(string playerId, float mana)

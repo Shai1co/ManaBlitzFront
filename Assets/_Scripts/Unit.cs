@@ -2,6 +2,7 @@
 using Cysharp.Threading.Tasks;
 using System.Threading;
 using UnityEngine;
+using HighlightPlus;
 
 namespace ManaGambit
 {
@@ -27,8 +28,9 @@ namespace ManaGambit
         [SerializeField] private string ownerId = "";
 
         private CancellationTokenSource moveCts;
-        private const float MoveDuration = 1f;
+        private const float DefaultMoveDurationSeconds = 1f;
         private const int DefaultBasicActionIndex = 0;
+        private const float DefaultServerTickMs = 33.333f;
 
         public Vector2Int CurrentPosition => currentPosition;
 
@@ -51,6 +53,9 @@ namespace ManaGambit
             ownerId = id;
         }
 
+        public int CurrentHp => currentHp;
+        public int MaxHp => maxHp;
+
         private ManaGambit.UnitAnimator unitAnimator;
 
         private UnitState currentState = UnitState.Idle;
@@ -71,28 +76,44 @@ namespace ManaGambit
 
         public async UniTask MoveTo(Vector2Int target)
         {
+            await MoveTo(target, DefaultMoveDurationSeconds, 0f);
+        }
+
+        public async UniTask MoveTo(Vector2Int target, float durationSeconds, float initialProgress)
+        {
+            Debug.Log($"{name} MoveTo {target} duration={durationSeconds} initialProgress={initialProgress}");
             SetState(UnitState.Moving);
 
             if (moveCts != null)
             {
                 moveCts.Cancel();
                 moveCts.Dispose();
+                moveCts = null;
             }
 
             moveCts = new CancellationTokenSource();
 
             Vector3 startPos = transform.position;
-            Vector3 endPos = Board.Instance.GetWorldPosition(target);
-            float elapsed = 0f;
+            Vector3 endPos = Board.Instance.GetSlotWorldPosition(target);
+            float total = Mathf.Max(0f, durationSeconds);
+            float elapsed = Mathf.Clamp01(initialProgress) * total;
 
             try
             {
-                while (elapsed < MoveDuration)
+                if (total <= 0.0001f || initialProgress >= 1f)
+                {
+                    transform.position = endPos;
+                    currentPosition = target;
+                    SetState(UnitState.Idle);
+                    return;
+                }
+
+                while (elapsed < total)
                 {
                     if (moveCts.Token.IsCancellationRequested) return;
 
                     elapsed += Time.deltaTime;
-                    float t = Mathf.Clamp01(elapsed / MoveDuration);
+                    float t = Mathf.Clamp01(elapsed / total);
                     transform.position = Vector3.Lerp(startPos, endPos, t);
 
                     await UniTask.Yield(PlayerLoopTiming.Update, cancellationToken: moveCts.Token);
@@ -120,7 +141,7 @@ namespace ManaGambit
 
         public async void Attack(Vector2Int target)
         {
-            transform.LookAt(Board.Instance.GetWorldPosition(target));
+            transform.LookAt(Board.Instance.GetSlotWorldPosition(target));
 
             // Determine wind-up from config for default/basic action (index 0)
             int windUpMs = 0;
@@ -140,6 +161,49 @@ namespace ManaGambit
             SetState(UnitState.Attacking);
 
             // TODO: trigger damage application here once server/client impact exists
+
+            SetState(UnitState.Idle);
+        }
+
+        public async UniTask PlayUseSkill(UseSkillData use)
+        {
+            if (use == null) return;
+            var targetCell = use.target != null && use.target.cell != null ? new Vector2Int(use.target.cell.x, use.target.cell.y) : currentPosition;
+            transform.LookAt(Board.Instance.GetSlotWorldPosition(targetCell));
+
+            int windUpMs = 0;
+            if (use.startTick > 0 && use.endWindupTick > use.startTick)
+            {
+                int dt = use.endWindupTick - use.startTick;
+                windUpMs = Mathf.Max(0, Mathf.RoundToInt(dt * DefaultServerTickMs));
+            }
+            if (windUpMs <= 0)
+            {
+                if (NetworkManager.Instance != null && NetworkManager.Instance.UnitConfigAsset != null)
+                {
+                    windUpMs = NetworkManager.Instance.UnitConfigAsset.GetWindUpMs(pieceId, Mathf.Max(0, use.skillId));
+                }
+            }
+
+            if (windUpMs > 0)
+            {
+                SetState(UnitState.WindUp);
+                await UniTask.Delay(windUpMs);
+            }
+
+            SetState(UnitState.Attacking);
+
+            // If server provided a specific hit tick, optionally wait until then before returning to idle
+            int hitDelayMs = 0;
+            if (use.hitTick > 0 && use.endWindupTick > 0 && use.hitTick > use.endWindupTick)
+            {
+                int dt = use.hitTick - use.endWindupTick;
+                hitDelayMs = Mathf.Max(0, Mathf.RoundToInt(dt * DefaultServerTickMs));
+            }
+            if (hitDelayMs > 0)
+            {
+                await UniTask.Delay(hitDelayMs);
+            }
 
             SetState(UnitState.Idle);
         }
@@ -190,6 +254,33 @@ namespace ManaGambit
             catch { /* ignore icon errors */ }
         }
 
+		public void ShowDamageNumber(int amount)
+		{
+			try
+			{
+				var prefab = GetComponentInChildren<DamageNumbersPro.DamageNumber>(true);
+				if (prefab != null)
+				{
+					var pos = transform.position + Vector3.up * 1.5f;
+					prefab.Spawn(pos, (float)amount);
+				}
+			}
+			catch { }
+		}
+
+		public void PlayHitFlash()
+		{
+			try
+			{
+				var hp = GetComponent<HighlightEffect>();
+				if (hp != null)
+				{
+					hp.HitFX();
+				}
+			}
+			catch { }
+		}
+
         public void ShowEphemeralText(string key)
         {
             if (string.IsNullOrEmpty(key)) return;
@@ -223,10 +314,36 @@ namespace ManaGambit
             {
                 transform.position = Board.Instance.GetWorldPosition(currentPosition);
             }
-            currentHp = data.hp;
+            // Initialize HP and MaxHP with robust fallbacks mirroring JS client expectations
             maxHp = data.maxHp;
+            if (maxHp <= 0)
+            {
+                // Fallback to config-defined hp for this pieceId
+                var cfg = NetworkManager.Instance != null ? NetworkManager.Instance.UnitConfigAsset : null;
+                var unitData = (cfg != null && !string.IsNullOrEmpty(pieceId)) ? cfg.GetData(pieceId) : null;
+                if (unitData != null && unitData.hp > 0) maxHp = unitData.hp;
+                if (maxHp <= 0) maxHp = Mathf.Max(1, data.hp); // last resort: use current hp or 1
+            }
+            currentHp = Mathf.Clamp(data.hp, 0, Mathf.Max(1, maxHp));
             currentMana = data.mana;
             // TODO: Update UI or other components with hp/mana
+        }
+
+        public void ApplyHpUpdate(int newHp)
+        {
+            int clamped = Mathf.Clamp(newHp, 0, Mathf.Max(1, maxHp));
+            currentHp = clamped;
+            try
+            {
+                var icons = GetComponent<UnitStatusIcons>();
+                if (icons == null) icons = GetComponentInChildren<UnitStatusIcons>(true);
+                if (icons != null)
+                {
+                    bool isOwn = AuthManager.Instance != null && string.Equals(ownerId, AuthManager.Instance.UserId);
+                    icons.SetHp(currentHp, Mathf.Max(1, maxHp), isOwn);
+                }
+            }
+            catch { /* UI optional */ }
         }
 
         private void SetState(UnitState newState)

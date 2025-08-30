@@ -1,6 +1,6 @@
 
 using System;
-using Newtonsoft.Json.Linq;
+using GameDevWare.Serialization;
 
 namespace ManaGambit
 {
@@ -54,6 +54,7 @@ namespace ManaGambit
 		public Pos to;
 		public int startTick;
 		public int endTick;
+		public int currentPips; // optional; piggybacked for mover
 	}
 
 	[Serializable]
@@ -75,6 +76,7 @@ namespace ManaGambit
 		public int startTick;
 		public int endWindupTick;
 		public int hitTick;
+		public int currentPips; // optional; piggybacked for attacker
 	}
 
 	[Serializable]
@@ -246,7 +248,11 @@ namespace ManaGambit
 		public int startTick;
 		public BoardData board;
 		// public Dictionary<string, float> playerMana; // not used now
-		public Countdown countdown;
+		// NOTE: server currently sends 'countdown' as a string token instead of an object
+		// Matching the old schema here causes deserialization to fail with
+		// "Unexpected token read 'StringLiteral' while 'BeginObject' is expected".
+		// Temporarily disable strict typing for countdown to accept messages.
+		// public Countdown countdown;
 	}
 
 	[Serializable]
@@ -254,6 +260,7 @@ namespace ManaGambit
 	{
 		public string unitId;
 		public string name; // "Move" | "UseSkill"
+		public int skillId; // optional; when name=="UseSkill" provide selected skill index, else -1
 	}
 
 	[Serializable]
@@ -283,6 +290,21 @@ namespace ManaGambit
 		public string type;
 		public string intentId;
 		public int serverTick;
-		public JObject data;
+		public IndexedDictionary<string, object> data;
+	}
+
+	[Serializable]
+	public class ManaUpdateData
+	{
+		public string playerId;
+		public float mana;
+	}
+
+	[Serializable]
+	public class ManaUpdateEvent
+	{
+		public string type;
+		public int serverTick;
+		public ManaUpdateData data;
 	}
 }

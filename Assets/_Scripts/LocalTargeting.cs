@@ -24,31 +24,102 @@ namespace ManaGambit
 
 		public static HashSet<Vector2Int> ComputeAttackTargets(Unit unit, UnitConfig config, int skillIndex = 0)
 		{
-			var set = new HashSet<Vector2Int>();
-			if (unit == null || config == null) return set;
+			// Deprecated placeholder; route to ComputeSkillTargets for full pattern logic
+			return ComputeSkillTargets(unit, config, skillIndex);
+		}
+
+		public static HashSet<Vector2Int> ComputeSkillTargets(Unit unit, UnitConfig config, int skillIndex = 0)
+		{
+			var result = new HashSet<Vector2Int>();
+			if (unit == null || config == null) return result;
 			var data = config.GetData(unit.PieceId);
-			if (data == null || data.actions == null || data.actions.Length == 0) return set;
-			// Temporary: adjacent cells as a placeholder (server authoritative checks still apply)
-			var pos = unit.CurrentPosition;
-			var candidates = new Vector2Int[]
+			if (data == null || data.actions == null || data.actions.Length == 0) return result;
+			if (skillIndex < 0 || skillIndex >= data.actions.Length) return result;
+			var action = data.actions[skillIndex];
+			if (action == null) return result;
+
+			// Attack patterns
+			if (action.attack != null && action.attack.patterns != null && action.attack.patterns.Count > 0)
 			{
-				new Vector2Int(pos.x+1, pos.y),
-				new Vector2Int(pos.x-1, pos.y),
-				new Vector2Int(pos.x, pos.y+1),
-				new Vector2Int(pos.x, pos.y-1),
-				new Vector2Int(pos.x+1, pos.y+1),
-				new Vector2Int(pos.x-1, pos.y-1),
-				new Vector2Int(pos.x+1, pos.y-1),
-				new Vector2Int(pos.x-1, pos.y+1),
-			};
-			foreach (var c in candidates)
-			{
-				if (Board.Instance.TryGetSlot(c, out var tr))
+				for (int i = 0; i < action.attack.patterns.Count; i++)
 				{
-					set.Add(c);
+					var p = action.attack.patterns[i];
+					TraceForAttack(unit, p,
+						passThrough: p.passThrough,
+						overFriendly: action.attack.overFriendly,
+						overEnemy: action.attack.overEnemy,
+						stopOnHit: action.attack.stopOnHit,
+						pierce: action.attack.pierce,
+						allowFriendlyTarget: false, // default unless extended in UnitConfig
+						collect: result);
 				}
 			}
-			return set;
+
+			// Move skill patterns (land on empty tiles like movement)
+			if (action.move != null && action.move.patterns != null && action.move.patterns.Count > 0)
+			{
+				for (int i = 0; i < action.move.patterns.Count; i++)
+				{
+					var p = action.move.patterns[i];
+					TraceForMoveSkill(unit, p,
+						overFriendly: action.move.overFriendly,
+						overEnemy: action.move.overEnemy,
+						collect: result);
+				}
+			}
+
+			// Swap: targets must be occupied cells with allowed allegiance
+			if (action.swap != null && action.swap.patterns != null && action.swap.patterns.Count > 0)
+			{
+				for (int i = 0; i < action.swap.patterns.Count; i++)
+				{
+					var p = action.swap.patterns[i];
+					TraceForSwap(unit, p, targetFriendly: action.swap.targetFriendly, overFriendly: action.swap.overFriendly, overEnemy: action.swap.overEnemy, collect: result);
+				}
+			}
+
+			// Buff: simple self-target or team targets if specified
+			if (action.buff != null)
+			{
+				var t = action.buff.targets;
+				if (t == "self")
+				{
+					result.Add(unit.CurrentPosition);
+				}
+				else if (t == "team")
+				{
+					// Highlight all friendly unit positions
+					foreach (var kv in Board.Instance.GetAllSlots())
+					{
+						if (Board.Instance.TryGetBoardSlot(kv.Key, out var bs) && bs != null && bs.IsOccupied && bs.Occupant != null)
+						{
+							bool isFriendly = AuthManager.Instance != null && string.Equals(bs.Occupant.OwnerId, AuthManager.Instance.UserId);
+							if (isFriendly) result.Add(kv.Key);
+						}
+					}
+				}
+			}
+
+			// Aura: allow choosing a center within radius (simple diamond/Manhattan)
+			if (action.aura != null && action.aura.radius > 0)
+			{
+				var origin = unit.CurrentPosition;
+				int r = action.aura.radius;
+				for (int dx = -r; dx <= r; dx++)
+				{
+					for (int dy = -r; dy <= r; dy++)
+					{
+						int md = Mathf.Abs(dx) + Mathf.Abs(dy);
+						if (md <= r)
+						{
+							var c = new Vector2Int(origin.x + dx, origin.y + dy);
+							if (Board.Instance.TryGetSlot(c, out var _)) result.Add(c);
+						}
+					}
+				}
+			}
+
+			return result;
 		}
 
 		private static void ApplyPattern(Vector2Int origin, string ownerId, UnitConfig.MovePattern pattern, bool overFriendly, bool overEnemy, HashSet<Vector2Int> result)
@@ -117,6 +188,197 @@ namespace ManaGambit
 				{
 					if (stopOnHit) break;
 					else break; // movement cannot pass through unless leap; passThrough not supported for character default move
+				}
+			}
+		}
+
+		private static void TraceForAttack(Unit unit, UnitConfig.MovePattern pattern, bool passThrough, bool overFriendly, bool overEnemy, bool stopOnHit, int pierce, bool allowFriendlyTarget, HashSet<Vector2Int> collect)
+		{
+			if (pattern == null) return;
+			var origin = unit.CurrentPosition;
+			int minRange = Mathf.Max(0, pattern.rangeMin);
+			int maxRange = Mathf.Max(minRange, pattern.rangeMax);
+			// 'any' uses BFS similar to JS client
+			if (string.Equals(pattern.dir, "any"))
+			{
+				var visited = new Dictionary<Vector2Int, int>(64);
+				var q = new Queue<(Vector2Int pos, int steps, bool stopped)>();
+				q.Enqueue((origin, 0, false));
+				visited[origin] = 0;
+				while (q.Count > 0)
+				{
+					var (cur, steps, stopped) = q.Dequeue();
+					if (steps > maxRange) continue;
+					if (steps >= minRange)
+					{
+						if (cur != origin)
+						{
+							if (Board.Instance.TryGetBoardSlot(cur, out var bs) && bs.IsOccupied && bs.Occupant != null)
+							{
+								bool isFriendly = AuthManager.Instance != null && string.Equals(bs.Occupant.OwnerId, AuthManager.Instance.UserId);
+								if (!isFriendly || allowFriendlyTarget)
+								{
+									collect.Add(cur);
+								}
+							}
+						}
+					}
+					if (steps == maxRange || stopped) continue;
+					// Explore 8-neighborhood
+					for (int dx = -1; dx <= 1; dx++)
+					{
+						for (int dy = -1; dy <= 1; dy++)
+						{
+							if (dx == 0 && dy == 0) continue;
+							var nx = new Vector2Int(cur.x + dx, cur.y + dy);
+							if (!Board.Instance.TryGetSlot(nx, out var _)) continue;
+							if (visited.TryGetValue(nx, out var prev) && prev <= steps + 1) continue;
+							bool occ = Board.Instance.TryGetBoardSlot(nx, out var nbs) && nbs.IsOccupied && nbs.Occupant != null;
+							visited[nx] = steps + 1;
+							if (!passThrough && occ)
+							{
+								// enqueue as leaf (consider target, don't expand further)
+								q.Enqueue((nx, steps + 1, true));
+								continue;
+							}
+							q.Enqueue((nx, steps + 1, false));
+						}
+					}
+				}
+				return;
+			}
+
+			// Directional rays with pierce/stop logic
+			var dirs = GetDirections(pattern.dir, unit.OwnerId);
+			for (int d = 0; d < dirs.Count; d++)
+			{
+				var step = dirs[d];
+				int pierced = 0;
+				for (int dist = 1; dist <= Mathf.Max(1, maxRange); dist++)
+				{
+					var cur = new Vector2Int(origin.x + step.x * dist, origin.y + step.y * dist);
+					if (!Board.Instance.TryGetSlot(cur, out var slot)) break;
+					var bs = slot.GetComponent<BoardSlot>();
+					bool occupied = bs != null && bs.IsOccupied && bs.Occupant != null;
+					if (dist >= minRange && occupied)
+					{
+						bool isFriendly = AuthManager.Instance != null && string.Equals(bs.Occupant.OwnerId, AuthManager.Instance.UserId);
+						if (!isFriendly || allowFriendlyTarget) collect.Add(cur);
+					}
+					if (occupied && !passThrough)
+					{
+						bool canPass = (AuthManager.Instance != null && bs.Occupant != null && string.Equals(bs.Occupant.OwnerId, AuthManager.Instance.UserId)) ? overFriendly : overEnemy;
+						if (!canPass)
+						{
+							if (stopOnHit) break;
+							pierced++;
+							if (pierce >= 0 && pierced > pierce) break;
+						}
+					}
+				}
+			}
+		}
+
+		private static void TraceForMoveSkill(Unit unit, UnitConfig.MovePattern pattern, bool overFriendly, bool overEnemy, HashSet<Vector2Int> collect)
+		{
+			if (pattern == null) return;
+			var origin = unit.CurrentPosition;
+			int minRange = Mathf.Max(0, pattern.rangeMin);
+			int maxRange = Mathf.Max(minRange, pattern.rangeMax);
+			if (string.Equals(pattern.dir, "any"))
+			{
+				var visited = new Dictionary<Vector2Int, int>(64);
+				var q = new Queue<(Vector2Int pos, int steps)>();
+				q.Enqueue((origin, 0));
+				visited[origin] = 0;
+				while (q.Count > 0)
+				{
+					var (cur, steps) = q.Dequeue();
+					if (steps > maxRange) continue;
+					if (steps >= minRange && cur != origin)
+					{
+						// Land only on empty tiles
+						bool occ = Board.Instance.TryGetBoardSlot(cur, out var bs) && bs.IsOccupied;
+						if (!occ) collect.Add(cur);
+					}
+					if (steps == maxRange) continue;
+					for (int dx = -1; dx <= 1; dx++)
+					{
+						for (int dy = -1; dy <= 1; dy++)
+						{
+							if (dx == 0 && dy == 0) continue;
+							var nx = new Vector2Int(cur.x + dx, cur.y + dy);
+							if (!Board.Instance.TryGetSlot(nx, out var _)) continue;
+							if (visited.TryGetValue(nx, out var prev) && prev <= steps + 1) continue;
+							bool occ = Board.Instance.TryGetBoardSlot(nx, out var nbs) && nbs.IsOccupied && nbs.Occupant != null;
+							if (occ)
+							{
+								bool isFriendly = AuthManager.Instance != null && string.Equals(nbs.Occupant.OwnerId, AuthManager.Instance.UserId);
+								bool canTraverse = isFriendly ? overFriendly : overEnemy;
+								if (!canTraverse) continue;
+							}
+							visited[nx] = steps + 1;
+							q.Enqueue((nx, steps + 1));
+						}
+					}
+				}
+				return;
+			}
+
+			// Directional rays for movement-like skills (land on empty tiles only)
+			var dirs = GetDirections(pattern.dir, unit.OwnerId);
+			for (int d = 0; d < dirs.Count; d++)
+			{
+				var step = dirs[d];
+				for (int dist = 1; dist <= Mathf.Max(1, maxRange); dist++)
+				{
+					var cur = new Vector2Int(origin.x + step.x * dist, origin.y + step.y * dist);
+					if (!Board.Instance.TryGetSlot(cur, out var slot)) break;
+					var bs = slot.GetComponent<BoardSlot>();
+					bool occupied = bs != null && bs.IsOccupied && bs.Occupant != null;
+					if (occupied)
+					{
+						bool isFriendly = AuthManager.Instance != null && string.Equals(bs.Occupant.OwnerId, AuthManager.Instance.UserId);
+						bool canTraverse = isFriendly ? overFriendly : overEnemy;
+						if (!canTraverse) break;
+						// can traverse, but cannot land here
+						continue;
+					}
+					if (dist >= minRange)
+					{
+						collect.Add(cur);
+					}
+				}
+			}
+		}
+
+		private static void TraceForSwap(Unit unit, UnitConfig.MovePattern pattern, bool targetFriendly, bool overFriendly, bool overEnemy, HashSet<Vector2Int> collect)
+		{
+			if (pattern == null) return;
+			var origin = unit.CurrentPosition;
+			var dirs = GetDirections(pattern.dir, unit.OwnerId);
+			for (int d = 0; d < dirs.Count; d++)
+			{
+				var step = dirs[d];
+				var current = origin;
+				for (int dist = 1; dist <= Mathf.Max(1, pattern.rangeMax); dist++)
+				{
+					current = new Vector2Int(current.x + step.x, current.y + step.y);
+					if (!Board.Instance.TryGetSlot(current, out var slot)) break;
+					var bs = slot.GetComponent<BoardSlot>();
+					bool occupied = bs != null && bs.IsOccupied && bs.Occupant != null;
+					if (occupied)
+					{
+						bool isFriendly = AuthManager.Instance != null && string.Equals(bs.Occupant.OwnerId, AuthManager.Instance.UserId);
+						if ((targetFriendly && isFriendly) || (!targetFriendly && !isFriendly))
+						{
+							collect.Add(current);
+							break; // can swap at first encountered valid unit
+						}
+						// else continue tracing if allowed to pass over
+						bool canPass = isFriendly ? overFriendly : overEnemy;
+						if (!canPass) break;
+					}
 				}
 			}
 		}

@@ -5,14 +5,21 @@ namespace ManaGambit
 {
 	public class BoardSlot : MonoBehaviour, IPointerEnterHandler, IPointerExitHandler
 	{
+		private const string MoveHighlightChildName = "Highlight";
+		private const string SkillHighlightChildName = "SkillHighlight";
+		private static readonly Color DefaultSkillHighlightColor = new Color(1f, 0f, 0f, 0.4f);
+
 		[SerializeField]
-		private MeshRenderer highlightRenderer;
+		private MeshRenderer highlightRenderer; // green highlight
 
 		[SerializeField]
 		private MeshRenderer mouseHighlightRenderer;
 
 		[SerializeField]
-		private MeshRenderer skillHighlightRenderer;
+		private MeshRenderer skillHighlightRenderer; // red highlight
+
+		[SerializeField]
+		private Color skillHighlightColor = new Color(1f, 0f, 0f, 0.4f);
 
 		[SerializeField]
 		private Unit occupant;
@@ -42,6 +49,11 @@ namespace ManaGambit
 			if (highlightRenderer != null)
 			{
 				highlightRenderer.enabled = isVisible;
+				// Mutual exclusivity: enabling move highlight disables skill highlight on the same slot
+				if (isVisible && skillHighlightRenderer != null)
+				{
+					skillHighlightRenderer.enabled = false;
+				}
 			}
 		}
 
@@ -50,7 +62,7 @@ namespace ManaGambit
 			// Setup selection highlight
 			if (highlightRenderer == null)
 			{
-				var highlightChild = transform.Find("Highlight");
+				var highlightChild = transform.Find(MoveHighlightChildName);
 				if (highlightChild != null)
 				{
 					highlightRenderer = highlightChild.GetComponent<MeshRenderer>();
@@ -94,13 +106,38 @@ namespace ManaGambit
 			// Setup skill highlight (separate overlay)
 			if (skillHighlightRenderer == null)
 			{
-				var skillChild = transform.Find("SkillHighlight");
+				var skillChild = transform.Find(SkillHighlightChildName);
 				if (skillChild != null)
 				{
 					skillHighlightRenderer = skillChild.GetComponent<MeshRenderer>();
 					if (skillHighlightRenderer != null)
 					{
 						skillHighlightRenderer.enabled = false;
+					}
+				}
+				// If no dedicated skill highlight exists, auto-create one by cloning the move highlight
+				if (skillHighlightRenderer == null && highlightRenderer != null)
+				{
+					var clone = Instantiate(highlightRenderer.gameObject, transform);
+					clone.name = SkillHighlightChildName;
+					clone.transform.localPosition = highlightRenderer.transform.localPosition;
+					clone.transform.localRotation = highlightRenderer.transform.localRotation;
+					clone.transform.localScale = highlightRenderer.transform.localScale;
+					var mr = clone.GetComponent<MeshRenderer>();
+					if (mr != null)
+					{
+						var baseMat = mr.sharedMaterial;
+						var mat = baseMat != null ? new Material(baseMat) : new Material(Shader.Find("Universal Render Pipeline/Lit"));
+						if (mat.HasProperty("_Color"))
+						{
+							// Use serialized color; fallback to default constant to avoid magic numbers
+							var color = skillHighlightColor;
+							if (color.a <= 0f) color = DefaultSkillHighlightColor;
+							mat.color = color;
+						}
+						mr.sharedMaterial = mat;
+						mr.enabled = false;
+						skillHighlightRenderer = mr;
 					}
 				}
 			}
@@ -175,6 +212,11 @@ namespace ManaGambit
 			if (skillHighlightRenderer != null)
 			{
 				skillHighlightRenderer.enabled = isVisible;
+				// Mutual exclusivity: enabling skill highlight disables move highlight on the same slot
+				if (isVisible && highlightRenderer != null)
+				{
+					highlightRenderer.enabled = false;
+				}
 			}
 		}
 

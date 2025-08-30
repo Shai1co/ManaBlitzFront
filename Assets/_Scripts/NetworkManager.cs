@@ -15,6 +15,10 @@ namespace ManaGambit
 		private const string LogTag = "[NetworkManager]";
 		private const string JoinQueuePath = "queue/join";
 		private const string ConfigPath = "config";
+		private const string IntentChannel = "Intent"; // Match JS client/server message type
+		private const float ReconnectInitialDelaySeconds = 0.5f; // no magic numbers
+		private const float ReconnectMaxDelaySeconds = 8f;
+		private const int ReconnectMaxAttempts = 3;
 		public static NetworkManager Instance { get; private set; }
 
 		private static readonly Vector3 BoardSpawnOffset = new Vector3(4f, 0f, 4f);
@@ -28,10 +32,15 @@ namespace ManaGambit
 		private string lastRoomId;
 		private string lastSessionId;
 		private ReconnectionToken lastReconnectionToken;
+		private bool isRoomOpen;
+		private bool isReconnecting;
+		private int reconnectAttempts;
 
 		[SerializeField] private UnitConfig unitConfig;  // Assign in Inspector
 		[SerializeField] private bool verboseNetworkLogging = false;
+		[SerializeField, Tooltip("If true, client will request ValidTargets from server when available (JS client does not). Default: false")] private bool serverSupportsValidTargets = false;
 		public UnitConfig UnitConfigAsset => unitConfig;
+		public bool ServerSupportsValidTargets => serverSupportsValidTargets;
 
 		// Spawn orientation configuration (editable in Inspector)
 		[SerializeField, Tooltip("X-axis rotation offset applied to spawned units (degrees)")]
@@ -248,23 +257,24 @@ namespace ManaGambit
 
 		public System.Action<ValidTargetsEvent> OnValidTargets;
 
-		public void RequestValidTargets(string unitId, string name = "Move")
+		public void RequestValidTargets(string unitId, string name = "Move", int skillId = -1)
 		{
 			if (room == null) return;
-			var req = new RequestValidTargets { unitId = unitId, name = name };
+			var req = new RequestValidTargets { unitId = unitId, name = name, skillId = skillId };
 			if (verboseNetworkLogging)
 			{
-				Debug.Log($"{LogTag} RequestValidTargets unitId={unitId} name={name}");
+				Debug.Log($"{LogTag} RequestValidTargets unitId={unitId} name={name} skillId={skillId}");
 			}
 			room.Send("RequestValidTargets", req);
 		}
 
-		public async UniTask SendIntent<TPayload>(IntentEnvelope<TPayload> envelope)
+		public UniTask SendIntent<TPayload>(IntentEnvelope<TPayload> envelope)
 		{
-			if (room == null)
+			if (room == null || !isRoomOpen)
 			{
-				Debug.LogWarning($"{LogTag} Cannot send intent; room is null");
-				return;
+				Debug.LogWarning($"{LogTag} Cannot send intent; room is {(room==null ? "null" : "closed")}. Attempting reconnect...");
+				TryAutoReconnect().Forget();
+				return UniTask.CompletedTask;
 			}
 			try
 			{
@@ -274,12 +284,13 @@ namespace ManaGambit
 					try { payloadJson = JsonUtility.ToJson(envelope.payload); } catch { }
 					Debug.Log($"{LogTag} SendIntent name={envelope.name} iid={envelope.intentId} matchId={envelope.matchId} userId={envelope.userId} payload={payloadJson}");
 				}
-				room.Send("Intent", envelope);
+				room.Send(IntentChannel, envelope);
 			}
 			catch (Exception ex)
 			{
 				Debug.LogWarning($"{LogTag} SendIntent failed: {ex.Message}");
 			}
+		return UniTask.CompletedTask;
 		}
 
 		private void OnDisable()
@@ -409,14 +420,35 @@ namespace ManaGambit
 
 		private void HandleMove(MoveData moveData)
 		{
+			Debug.Log($"{LogTag} HandleMove unitId={moveData.unitId} to={moveData.to.x},{moveData.to.y}");
 			var unit = GameManager.Instance.GetUnitById(moveData.unitId);
 			if (unit != null)
 			{
 				// Clear old occupancy
 				Board.Instance.ClearOccupied(unit.CurrentPosition, unit);
-				unit.MoveTo(new Vector2Int(moveData.to.x, moveData.to.y)).Forget();
+				// Compute duration from server ticks when available
+				float durationSeconds = 0f;
+				try
+				{
+					if (moveData.startTick > 0 && moveData.endTick > moveData.startTick)
+					{
+						const float defaultTickLenMs = 33.333f;
+						int dt = moveData.endTick - moveData.startTick;
+						durationSeconds = Mathf.Max(0.033f, (dt * defaultTickLenMs) / 1000f);
+					}
+				}
+				catch { durationSeconds = 0f; }
+				var dest = new Vector2Int(moveData.to.x, moveData.to.y);
+				if (durationSeconds > 0.0001f)
+				{
+					unit.MoveTo(dest, durationSeconds, 0f).Forget();
+				}
+				else
+				{
+					unit.MoveTo(dest).Forget();
+				}
 				// Mark new occupancy immediately (temporary until server patch confirms)
-				Board.Instance.SetOccupied(new Vector2Int(moveData.to.x, moveData.to.y), unit);
+				Board.Instance.SetOccupied(dest, unit);
 			}
 			else
 			{
@@ -522,6 +554,9 @@ namespace ManaGambit
 				return;
 			}
 
+			isRoomOpen = true;
+			reconnectAttempts = 0;
+
 			room.OnMessage("*", (string type) =>
 			{
 				Debug.Log($"{LogTag} OnMessage '*' type='{type}'");
@@ -531,7 +566,21 @@ namespace ManaGambit
 			room.OnMessage<GameEvent>("GameStart", evt => { if (evt != null && evt.data != null && evt.data.board != null) SetupBoard(evt.data.board); });
 			room.OnMessage<GameEvent>("GameAboutToStart", evt => { if (evt != null && evt.data != null && evt.data.board != null) SetupBoard(evt.data.board); });
 			room.OnMessage<MoveEvent>("Move", evt => { if (evt != null && evt.data != null) { HandleMove(evt.data); if (!string.IsNullOrEmpty(evt.intentId) && IntentManager.Instance != null) IntentManager.Instance.HandleIntentResponse(evt.intentId); } });
-			room.OnMessage<GameEvent>("ManaUpdate", _ => { /* ignore to avoid warnings for now */ });
+			room.OnMessage<ManaUpdateEvent>("ManaUpdate", evt =>
+			{
+				try
+				{
+					var playerId = evt?.data?.playerId;
+					var mana = evt?.data?.mana ?? 0f;
+					if (!string.IsNullOrEmpty(playerId) && AuthManager.Instance != null && playerId == AuthManager.Instance.UserId)
+					{
+						var manaBar = FindFirstObjectByType<ManaBarUI>();
+						if (manaBar != null) manaBar.SetMana(mana);
+						if (HudController.Instance != null) HudController.Instance.UpdateMana(playerId, mana);
+					}
+				}
+				catch (System.Exception) { /* ignore */ }
+			});
 
 			room.OnMessage<ServerEventEnvelopeRaw>("ServerEvent", envelope =>
 			{
@@ -551,7 +600,7 @@ namespace ManaGambit
 						{
 							try
 							{
-								var move = envelope.data.ToObject<MoveData>();
+								var move = envelope.data != null ? JObject.FromObject(envelope.data).ToObject<MoveData>() : null;
 								if (move != null) { HandleMove(move); if (!string.IsNullOrEmpty(envelope.intentId) && IntentManager.Instance != null) IntentManager.Instance.HandleIntentResponse(envelope.intentId); }
 							}
 							catch (System.Exception ex)
@@ -563,13 +612,13 @@ namespace ManaGambit
 					case "UseSkill":
 						try
 						{
-							var use = envelope.data != null ? envelope.data.ToObject<UseSkillData>() : null;
+							var use = envelope.data != null ? JObject.FromObject(envelope.data).ToObject<UseSkillData>() : null;
 							if (use != null && !string.IsNullOrEmpty(use.unitId))
 							{
 								var unit = GameManager.Instance.GetUnitById(use.unitId);
 								if (unit != null)
 								{
-									unit.Attack(new Vector2Int(use.target?.cell?.x ?? unit.CurrentPosition.x, use.target?.cell?.y ?? unit.CurrentPosition.y));
+									unit.PlayUseSkill(use).Forget();
 								}
 							}
 						}
@@ -578,16 +627,21 @@ namespace ManaGambit
 					case "UseSkillResult":
 						try
 						{
-							var res = envelope.data != null ? envelope.data.ToObject<UseSkillResultData>() : null;
+							var res = envelope.data != null ? JObject.FromObject(envelope.data).ToObject<UseSkillResultData>() : null;
 							if (res != null && res.targets != null)
 							{
 								for (int i = 0; i < res.targets.Length; i++)
 								{
 									var t = res.targets[i];
-									if (t != null && t.killed)
+									if (t == null) continue;
+									var victim = !string.IsNullOrEmpty(t.unitId) ? GameManager.Instance.GetUnitById(t.unitId) : null;
+									if (victim != null)
 									{
-										var victim = GameManager.Instance.GetUnitById(t.unitId);
-										if (victim != null)
+										if (t.damage > 0) victim.ShowDamageNumber(t.damage);
+										victim.PlayHitFlash();
+										int nextHp = t.hp > 0 ? t.hp : Mathf.Max(0, victim.CurrentHp - Mathf.Max(0, t.damage));
+										victim.ApplyHpUpdate(nextHp);
+										if (t.killed || t.dead || nextHp <= 0)
 										{
 											Board.Instance.ClearOccupied(victim.CurrentPosition, victim);
 											UnityEngine.Object.Destroy(victim.gameObject);
@@ -610,8 +664,62 @@ namespace ManaGambit
 			});
 
 			room.OnMessage<GameEvent>("StateHeartbeat", _ => { /* ignore */ });
-			room.OnMessage<UseSkillEvent>("UseSkill", evt => { /* TODO: trigger cast visuals if needed */ });
-			room.OnMessage<UseSkillResultEvent>("UseSkillResult", evt => { /* TODO: show impacts/damage */ });
+			room.OnMessage<UseSkillEvent>("UseSkill", evt =>
+			{
+				try
+				{
+					var use = evt != null ? evt.data : null;
+					if (use != null && !string.IsNullOrEmpty(use.unitId))
+					{
+						var unit = GameManager.Instance.GetUnitById(use.unitId);
+						if (unit != null)
+						{
+							unit.PlayUseSkill(use).Forget();
+						}
+					}
+				}
+				catch (System.Exception) { /* ignore */ }
+			});
+			room.OnMessage<UseSkillResultEvent>("UseSkillResult", evt =>
+			{
+				try
+				{
+					var res = evt != null ? evt.data : null;
+					if (res != null)
+					{
+						if (res.currentPips >= 0 && !string.IsNullOrEmpty(res.attacker))
+						{
+							var atk = GameManager.Instance.GetUnitById(res.attacker);
+							if (atk != null)
+							{
+								bool isOwn = AuthManager.Instance != null && string.Equals(atk.OwnerId, AuthManager.Instance.UserId);
+								if (isOwn)
+								{
+									var manaBar = FindFirstObjectByType<ManaBarUI>();
+									if (manaBar != null) manaBar.SetMana(res.currentPips);
+									if (HudController.Instance != null) HudController.Instance.UpdateMana(AuthManager.Instance.UserId, res.currentPips);
+								}
+							}
+						}
+						// Show hit feedback
+						if (res.targets != null)
+						{
+							for (int i = 0; i < res.targets.Length; i++)
+							{
+								var t = res.targets[i];
+								if (t == null) continue;
+								var victim = !string.IsNullOrEmpty(t.unitId) ? GameManager.Instance.GetUnitById(t.unitId) : null;
+								if (victim != null)
+								{
+									if (t.damage > 0) victim.ShowDamageNumber(t.damage);
+									victim.PlayHitFlash();
+								}
+							}
+						}
+					}
+				}
+				catch { /* ignore */ }
+			});
 			room.OnMessage<StatusUpdateEvent>("StatusUpdate", evt =>
 			{
 				try
@@ -631,12 +739,20 @@ namespace ManaGambit
 					Debug.LogWarning($"{LogTag} StatusUpdate handler exception: {ex.Message}");
 				}
 			});
-			room.OnMessage<GameOverEvent>("GameOver", evt => { Debug.Log($"{LogTag} GameOver: reason={evt?.data?.reason} winner={evt?.data?.winnerUserId}"); });
+			room.OnMessage<GameOverEvent>("GameOver", evt =>
+			{
+				Debug.Log($"{LogTag} GameOver: reason={evt?.data?.reason} winner={evt?.data?.winnerUserId}");
+				if (HudController.Instance != null)
+				{
+					HudController.Instance.ShowGameOver(evt?.data?.winnerUserId);
+				}
+			});
 			room.OnMessage<ErrorEvent>("Error", evt =>
 			{
 				if (evt == null || evt.data == null)
 				{
 					Debug.LogWarning($"{LogTag} Error (no data)");
+					if (HudController.Instance != null) HudController.Instance.ShowToast("Error", "error", 3);
 				}
 				else
 				{
@@ -644,6 +760,11 @@ namespace ManaGambit
 					if (IntentManager.Instance != null)
 					{
 						IntentManager.Instance.HandleIntentError(evt);
+					}
+					if (HudController.Instance != null)
+					{
+						var msg = string.IsNullOrEmpty(evt.data.msg) ? evt.data.code : evt.data.msg;
+						HudController.Instance.ShowToast(msg, "error", 3);
 					}
 				}
 			});
@@ -653,6 +774,56 @@ namespace ManaGambit
 				Debug.Log($"{LogTag} ValidTargets received for unit={evt?.data?.unitId} count={count}");
 				OnValidTargets?.Invoke(evt);
 			});
+
+			// Handle disconnections/errors to support auto-reconnect
+			room.OnLeave += code =>
+			{
+				isRoomOpen = false;
+				Debug.LogWarning($"{LogTag} Room closed/left. code={code}");
+				TryAutoReconnect().Forget();
+			};
+			room.OnError += (code, message) =>
+			{
+				Debug.LogWarning($"{LogTag} Room error code={code} message={message}");
+				// Treat errors similarly to close and attempt reconnect
+				isRoomOpen = false;
+				TryAutoReconnect().Forget();
+			};
+		}
+
+		private async UniTaskVoid TryAutoReconnect()
+		{
+			if (isReconnecting) return;
+			if (colyseusClient == null || lastReconnectionToken == null)
+			{
+				Debug.LogWarning($"{LogTag} Cannot auto-reconnect: missing client or token");
+				return;
+			}
+			isReconnecting = true;
+			float delay = ReconnectInitialDelaySeconds;
+			while (reconnectAttempts < ReconnectMaxAttempts)
+			{
+				reconnectAttempts++;
+				Debug.Log($"{LogTag} Attempting reconnect {reconnectAttempts}/{ReconnectMaxAttempts} after {delay:0.##}s...");
+				await UniTask.Delay((int)(delay * 1000f));
+				try
+				{
+					await Reconnect();
+					isRoomOpen = true;
+					isReconnecting = false;
+					Debug.Log($"{LogTag} Reconnect successful.");
+					if (HudController.Instance != null) HudController.Instance.ShowToast("Reconnected", "info", 2);
+					return;
+				}
+				catch (System.Exception ex)
+				{
+					Debug.LogWarning($"{LogTag} Reconnect attempt {reconnectAttempts} failed: {ex.Message}");
+				}
+				delay = Mathf.Min(delay * 2f, ReconnectMaxDelaySeconds);
+			}
+			isReconnecting = false;
+			Debug.LogWarning($"{LogTag} Max reconnect attempts reached. Please try manually.");
+			if (HudController.Instance != null) HudController.Instance.ShowToast("Disconnected", "error", 3);
 		}
 	}
 }
