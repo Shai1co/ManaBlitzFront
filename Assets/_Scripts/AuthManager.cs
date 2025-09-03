@@ -13,7 +13,7 @@ namespace ManaGambit
         private const string LoginPath = "auth/login";
         public static AuthManager Instance { get; private set; }
 
-        [SerializeField] private string serverUrl = "https://manablitz.onrender.com/";
+        // Server URL is now centralized in ServerConfig
 
         public string Token { get; private set; }
         public string UserId { get; private set; }
@@ -30,7 +30,7 @@ namespace ManaGambit
 
         public async UniTask<bool> Register(string email, string password, string username)
         {
-            string url = serverUrl + RegisterPath;
+            string url = ServerConfig.ServerUrl + RegisterPath;
             var payload = new RegisterRequest { email = email, password = password, username = username };
             string json = JsonUtility.ToJson(payload);
             Debug.Log($"{LogTag} POST {url} body={json}");
@@ -67,7 +67,7 @@ namespace ManaGambit
 
         public async UniTask<bool> Login(string email, string password)
         {
-            string url = serverUrl + LoginPath;
+            string url = ServerConfig.ServerUrl + LoginPath;
             var payload = new LoginRequest { email = email, password = password };
             string json = JsonUtility.ToJson(payload);
             Debug.Log($"{LogTag} POST {url} body={json}");
@@ -104,7 +104,7 @@ namespace ManaGambit
 
         public async UniTask<bool> LoginWithUsername(string username, string password)
         {
-            string url = serverUrl + LoginPath;
+            string url = ServerConfig.ServerUrl + LoginPath;
             var payload = new UsernameLoginRequest { username = username, password = password };
             string json = JsonUtility.ToJson(payload);
             Debug.Log($"{LogTag} POST {url} body={json}");

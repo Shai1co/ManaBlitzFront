@@ -219,9 +219,9 @@ namespace ManaGambit
 						{
 							if (Board.Instance.TryGetBoardSlot(cur, out var bs) && bs.IsOccupied && bs.Occupant != null)
 							{
-								bool isFriendlyHere = AuthManager.Instance != null && string.Equals(bs.Occupant.OwnerId, AuthManager.Instance.UserId);
-								bool canCollectHere = (isFriendlyHere && overFriendly) || (!isFriendlyHere && overEnemy) || allowFriendlyTarget;
-								if (canCollectHere)
+								bool isFriendlyHere = string.Equals(bs.Occupant.OwnerId, unit.OwnerId);
+								// Collect enemy cells; allow friendly only if explicitly permitted by allowFriendlyTarget
+								if (!isFriendlyHere || allowFriendlyTarget)
 								{
 									collect.Add(cur);
 								}
@@ -239,7 +239,7 @@ namespace ManaGambit
 							if (!Board.Instance.TryGetSlot(nx, out var _)) continue;
 							// Determine occupancy and friendliness
 							bool occ = Board.Instance.TryGetBoardSlot(nx, out var nbs) && nbs.IsOccupied && nbs.Occupant != null;
-							bool isFriendlyNext = occ && (AuthManager.Instance != null && string.Equals(nbs.Occupant.OwnerId, AuthManager.Instance.UserId));
+							bool isFriendlyNext = occ && string.Equals(nbs.Occupant.OwnerId, unit.OwnerId);
 							int nextRemainingPierce = remainingPierce;
 							bool nextStopped = false;
 

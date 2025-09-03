@@ -28,7 +28,7 @@ namespace ManaGambit
 
 		private static readonly Vector3 BoardSpawnOffset = new Vector3(4f, 0f, 4f);
 
-		[SerializeField] private string serverUrl = "https://manablitz.onrender.com/";
+		// Server URL is now centralized in ServerConfig
 		private string cachedEtag = null;
 		private string lastConfigJson = null;
 
@@ -106,7 +106,7 @@ namespace ManaGambit
 				return false;
 			}
 
-			string url = serverUrl + ConfigPath;
+			string url = ServerConfig.ServerUrl + ConfigPath;
 			var request = new UnityWebRequest(url, "GET");
 			request.downloadHandler = new DownloadHandlerBuffer();
 			request.SetRequestHeader("Authorization", $"Bearer {AuthManager.Instance.Token}");
@@ -138,6 +138,24 @@ namespace ManaGambit
 				RulesHash = cfg.rulesHash;
 				Debug.Log($"{LogTag} Config fetched. characters={(cfg.characters != null ? cfg.characters.Length : 0)}, rulesHash={RulesHash}");
 				lastConfigJson = body;
+				// Apply max mana to UI if available in constants
+				try
+				{
+					var manaBar = ManaBarUI.Instance != null ? ManaBarUI.Instance : FindFirstObjectByType<ManaBarUI>();
+					if (manaBar != null && cfg != null && cfg.constants != null)
+					{
+						// Server constants use maxMana (optional); default to 10 if absent
+						int maxMana = 10;
+						var constantsJson = JObject.FromObject(cfg.constants);
+						if (constantsJson.TryGetValue("maxMana", out var maxManaToken))
+						{
+							int parsed = (int)maxManaToken;
+							if (parsed > 0) maxMana = parsed;
+						}
+						manaBar.SetMaxPips(maxMana);
+					}
+				}
+				catch { /* ignore */ }
 				if (request.GetResponseHeaders() != null && request.GetResponseHeaders().TryGetValue("ETag", out var etag))
 				{
 					cachedEtag = etag;
@@ -160,7 +178,7 @@ namespace ManaGambit
 				return;
 			}
 
-			string url = serverUrl + JoinQueuePath;
+			string url = ServerConfig.ServerUrl + JoinQueuePath;
 			var payload = new JoinQueueRequest { region = "auto", mode = mode };
 			string json = JsonUtility.ToJson(payload);
 			Debug.Log($"{LogTag} POST {url} body={json}");
@@ -202,8 +220,8 @@ namespace ManaGambit
 
 			if (string.IsNullOrEmpty(endpoint))
 			{
-				endpoint = BuildWebSocketEndpointFromHttp(serverUrl);
-				Debug.LogWarning($"{LogTag} No endpoint provided by response; derived endpoint='{endpoint}' from serverUrl='{serverUrl}'");
+				endpoint = BuildWebSocketEndpointFromHttp(ServerConfig.ServerUrl);
+				Debug.LogWarning($"{LogTag} No endpoint provided by response; derived endpoint='{endpoint}' from serverUrl='{ServerConfig.ServerUrl}'");
 			}
 
 			string roomId = response?.roomId ?? response?.reservation?.roomId ?? response?.reservation?.room?.id ?? response?.reservation?.room?.roomId;
@@ -600,21 +618,114 @@ namespace ManaGambit
 				Debug.Log($"{LogTag} OnMessage '*' type='{type}'");
 			});
 
-			room.OnMessage<StateSnapshot>("StateSnapshot", snap => { Debug.Log($"{LogTag} StateSnapshot received"); if (snap != null && snap.board != null) SetupBoard(snap.board); });
-			room.OnMessage<GameEvent>("GameStart", evt => { if (evt != null && evt.data != null && evt.data.board != null) SetupBoard(evt.data.board); });
-			room.OnMessage<GameEvent>("GameAboutToStart", evt => { if (evt != null && evt.data != null && evt.data.board != null) SetupBoard(evt.data.board); });
+			room.OnMessage<StateSnapshot>("StateSnapshot", snap =>
+			{
+				Debug.Log($"{LogTag} StateSnapshot received");
+				if (snap != null)
+				{
+					if (snap.board != null) SetupBoard(snap.board);
+					// Initialize player mana from snapshot if present
+					try
+					{
+						var pid = AuthManager.Instance != null ? AuthManager.Instance.UserId : null;
+						if (!string.IsNullOrEmpty(pid))
+						{
+							float mana = 0f;
+							bool found = false;
+							if (snap.playerMana != null && snap.playerMana.TryGetValue(pid, out var dictMana)) { mana = dictMana; found = true; }
+							var manaBar = ManaBarUI.Instance != null ? ManaBarUI.Instance : FindFirstObjectByType<ManaBarUI>();
+							if (found && manaBar != null) manaBar.SetMana(mana);
+							if (found && HudController.Instance != null) HudController.Instance.UpdateMana(pid, mana);
+						}
+						// Countdown from snapshot
+						if (HudController.Instance != null)
+						{
+							HudController.Instance.SetCountdownFromSnapshot(snap, snap.serverTick, DefaultTickRateMs);
+						}
+					}
+					catch { /* ignore */ }
+				}
+			});
+			room.OnMessage<GameEvent>("GameStart", evt =>
+			{
+				if (evt != null && evt.data != null)
+				{
+					if (evt.data.board != null) SetupBoard(evt.data.board);
+					// Initialize player mana from GameStart if provided
+					try
+					{
+						var pid = AuthManager.Instance != null ? AuthManager.Instance.UserId : null;
+						if (!string.IsNullOrEmpty(pid) && evt.data.playerMana != null && evt.data.playerMana.TryGetValue(pid, out var mana))
+						{
+							var manaBar = ManaBarUI.Instance != null ? ManaBarUI.Instance : FindFirstObjectByType<ManaBarUI>();
+							if (manaBar != null) manaBar.SetMana(mana);
+							if (HudController.Instance != null) HudController.Instance.UpdateMana(pid, mana);
+						}
+						// Set max from constants if fetched earlier
+						if (!string.IsNullOrEmpty(RulesHash))
+						{
+							var manaBar = ManaBarUI.Instance != null ? ManaBarUI.Instance : FindFirstObjectByType<ManaBarUI>();
+							if (manaBar != null && lastConfigJson != null)
+							{
+								var cfg = JsonUtility.FromJson<CombinedConfig>(lastConfigJson);
+								int maxMana = cfg != null && cfg.constants != null ? (cfg.constants.manaUpdateIntervalTicks >= 0 ? (cfg.constants.manaUpdateIntervalTicks * 0 + 10) : 10) : 10;
+								manaBar.SetMaxPips(maxMana);
+							}
+						}
+						// Countdown should stop at game start
+						if (HudController.Instance != null) HudController.Instance.StopCountdown();
+					}
+					catch { /* ignore */ }
+				}
+			});
+			room.OnMessage<GameEvent>("GameAboutToStart", evt =>
+			{
+				if (evt != null && evt.data != null)
+				{
+					if (evt.data.board != null) SetupBoard(evt.data.board);
+					// Start countdown if we have a future startTick
+					try
+					{
+						if (HudController.Instance != null)
+						{
+							HudController.Instance.SetCountdownFromGameEvent(evt, DefaultTickRateMs);
+						}
+					}
+					catch { /* ignore */ }
+				}
+			});
 			room.OnMessage<MoveEvent>("Move", evt => { if (evt != null && evt.data != null) { HandleMove(evt.data); if (!string.IsNullOrEmpty(evt.intentId) && IntentManager.Instance != null) IntentManager.Instance.HandleIntentResponse(evt.intentId); } });
-			room.OnMessage<ManaUpdateEvent>("ManaUpdate", evt =>
+			room.OnMessage<ManaUpdateData>("ManaUpdate", data =>
 			{
 				try
 				{
-					var playerId = evt?.data?.playerId;
-					var mana = evt?.data?.mana ?? 0f;
-					if (!string.IsNullOrEmpty(playerId) && AuthManager.Instance != null && playerId == AuthManager.Instance.UserId)
+					var playerId = data != null ? data.playerId : null;
+					var mana = data != null ? data.mana : 0f;
+					if (verboseNetworkLogging)
 					{
-						var manaBar = FindFirstObjectByType<ManaBarUI>();
+						Debug.Log($"{LogTag} ManaUpdate playerId={playerId} mana={mana}");
+					}
+					// Mirror JS leniency: if playerId is missing, assume it's for the local player
+					bool applyToLocal = false;
+					var myId = AuthManager.Instance != null ? AuthManager.Instance.UserId : null;
+					if (string.IsNullOrEmpty(playerId))
+					{
+						applyToLocal = true;
+					}
+					else if (!string.IsNullOrEmpty(myId) && string.Equals(playerId, myId, StringComparison.Ordinal))
+					{
+						applyToLocal = true;
+					}
+					else if (string.IsNullOrEmpty(myId))
+					{
+						// If we don't know our user id yet, still apply to keep UI responsive
+						applyToLocal = true;
+					}
+					if (applyToLocal)
+					{
+						var manaBar = ManaBarUI.Instance != null ? ManaBarUI.Instance : FindFirstObjectByType<ManaBarUI>();
 						if (manaBar != null) manaBar.SetMana(mana);
-						if (HudController.Instance != null) HudController.Instance.UpdateMana(playerId, mana);
+						if (HudController.Instance != null) HudController.Instance.UpdateMana(myId ?? playerId ?? string.Empty, mana);
 					}
 				}
 				catch (System.Exception) { /* ignore */ }
@@ -671,6 +782,7 @@ namespace ManaGambit
 									}
 								}
 							}
+							// Do not update player mana from per-unit pips here; rely on ManaUpdate only
 							if (!string.IsNullOrEmpty(envelope.intentId) && IntentManager.Instance != null) IntentManager.Instance.HandleIntentResponse(envelope.intentId);
 						}
 						break;

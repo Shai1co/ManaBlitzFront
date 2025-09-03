@@ -7,7 +7,7 @@ using Newtonsoft.Json.Linq;
 namespace ManaGambit
 {
 	[CreateAssetMenu(fileName = "UnitConfig", menuName = "ManaGambit/UnitConfig")]
-	public class UnitConfig : ScriptableObject
+	public partial class UnitConfig : ScriptableObject
 	{
 		[SerializeField] private TextAsset jsonAsset;  // Assign characters.json here
 		private const string JsonRootDataKey = "data";

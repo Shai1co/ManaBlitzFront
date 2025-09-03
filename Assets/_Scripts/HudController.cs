@@ -12,12 +12,25 @@ namespace ManaGambit
 		[SerializeField] private TextMeshProUGUI statusText;
 		[SerializeField] private TextMeshProUGUI countdownText;
 		[SerializeField] private GameObject gameOverPanel;
-		[SerializeField] private TextMeshProUGUI gameOverText;
+		//[SerializeField] private TextMeshProUGUI gameOverText;
+		[SerializeField, Tooltip("Container shown when the local player wins")] private GameObject gameOverWinContainer;
+		[SerializeField, Tooltip("Text element for win state (optional if nested under container)")] private TextMeshProUGUI gameOverWinText;
+		[SerializeField, Tooltip("Container shown when the local player loses")] private GameObject gameOverLoseContainer;
+		[SerializeField, Tooltip("Text element for lose state (optional if nested under container)")] private TextMeshProUGUI gameOverLoseText;
 		[SerializeField, Tooltip("Default number of seconds to show toast messages")]
 		private int defaultToastSeconds = 3;
 		[SerializeField, Tooltip("Transient toast message surface; separate from persistent status")] private TextMeshProUGUI toastText;
+		[SerializeField, Tooltip("CanvasGroup for toast and its decorations - controls visibility and interactivity")] private CanvasGroup toastCanvasGroup;
 
 		private System.Threading.CancellationTokenSource toastCts;
+		private System.Threading.CancellationTokenSource countdownCts;
+		private const int OneSecondMs = 1000;
+		private static int TicksToSecondsCeil(int ticks, float tickMs)
+		{
+			if (ticks <= 0) return 0;
+			float seconds = (ticks * tickMs) / 1000f;
+			return Mathf.CeilToInt(seconds);
+		}
 
 		private void CleanupToastCts()
 		{
@@ -26,6 +39,16 @@ namespace ManaGambit
 				toastCts.Cancel();
 				toastCts.Dispose();
 				toastCts = null;
+			}
+		}
+
+		private void CleanupCountdownCts()
+		{
+			if (countdownCts != null)
+			{
+				countdownCts.Cancel();
+				countdownCts.Dispose();
+				countdownCts = null;
 			}
 		}
 
@@ -83,22 +106,109 @@ namespace ManaGambit
 			if (countdownText != null) countdownText.enabled = false;
 		}
 
+		public void StartCountdown(int seconds)
+		{
+			if (seconds <= 0)
+			{
+				HideCountdown();
+				CleanupCountdownCts();
+				return;
+			}
+			ShowCountdown(seconds);
+			CleanupCountdownCts();
+			countdownCts = new System.Threading.CancellationTokenSource();
+			RunCountdownSeconds(seconds, countdownCts.Token).Forget();
+		}
+
+		public void StopCountdown()
+		{
+			CleanupCountdownCts();
+			HideCountdown();
+		}
+
+		public void SetCountdownFromSnapshot(StateSnapshot snap, int currentServerTick, float tickMs)
+		{
+			int remaining = 0;
+			if (snap != null)
+			{
+				if (snap.TryGetCountdown(out Countdown cd) && cd != null)
+				{
+					int endTick = cd.startsAtTick + cd.countdownTicks;
+					int remainingTicks = endTick - currentServerTick;
+					remaining = TicksToSecondsCeil(remainingTicks, tickMs);
+				}
+				else
+				{
+					int delta = snap.startTick - currentServerTick;
+					remaining = TicksToSecondsCeil(delta, tickMs);
+				}
+			}
+			if (remaining > 0) StartCountdown(remaining); else StopCountdown();
+		}
+
+		public void SetCountdownFromGameEvent(GameEvent evt, float tickMs)
+		{
+			int remaining = 0;
+			if (evt != null && evt.data != null)
+			{
+				int delta = evt.data.startTick - evt.serverTick;
+				remaining = TicksToSecondsCeil(delta, tickMs);
+			}
+			if (remaining > 0) StartCountdown(remaining); else StopCountdown();
+		}
+
+		private async UniTaskVoid RunCountdownSeconds(int seconds, System.Threading.CancellationToken token)
+		{
+			try
+			{
+				int remaining = Mathf.Max(0, seconds);
+				while (remaining > 0)
+				{
+					await UniTask.Delay(OneSecondMs, cancellationToken: token);
+					remaining = Mathf.Max(0, remaining - 1);
+					UpdateCountdownTimer(remaining);
+				}
+				HideCountdown();
+			}
+			catch (System.OperationCanceledException)
+			{
+				// expected on cancellation
+			}
+			catch (System.Exception ex)
+			{
+				Debug.LogError($"[HUD] Unexpected error in RunCountdownSeconds: {ex}");
+			}
+		}
+
 		public void ShowGameOver(string winnerUserId)
 		{
+			// Always show the root game over panel
 			if (gameOverPanel != null) gameOverPanel.SetActive(true);
-			if (gameOverText != null)
+
+			// Determine win/lose for the local player
+			bool hasWinner = !string.IsNullOrEmpty(winnerUserId);
+			bool didLocalPlayerWin = false;
+			if (hasWinner && AuthManager.Instance != null && !string.IsNullOrEmpty(AuthManager.Instance.UserId))
 			{
-				gameOverText.text = string.IsNullOrEmpty(winnerUserId) ? "Game Over" : ($"Winner: {winnerUserId}");
+				didLocalPlayerWin = string.Equals(winnerUserId, AuthManager.Instance.UserId);
 			}
-			else
-			{
-				Debug.Log($"[HUD] Game Over. Winner: {winnerUserId}");
-			}
+
+			// Only use dedicated win/lose UI; never use generic text
+			if (gameOverWinContainer != null) gameOverWinContainer.SetActive(hasWinner && didLocalPlayerWin);
+			if (gameOverLoseContainer != null) gameOverLoseContainer.SetActive(hasWinner && !didLocalPlayerWin);
+			if (gameOverWinText != null) gameOverWinText.gameObject.SetActive(hasWinner && didLocalPlayerWin);
+			if (gameOverLoseText != null) gameOverLoseText.gameObject.SetActive(hasWinner && !didLocalPlayerWin);
+			//if (gameOverText != null) gameOverText.enabled = false;
 		}
 
 		public void HideGameOver()
 		{
 			if (gameOverPanel != null) gameOverPanel.SetActive(false);
+			//if (gameOverText != null) gameOverText.enabled = false;
+			if (gameOverWinContainer != null) gameOverWinContainer.SetActive(false);
+			if (gameOverLoseContainer != null) gameOverLoseContainer.SetActive(false);
+			if (gameOverWinText != null) gameOverWinText.gameObject.SetActive(false);
+			if (gameOverLoseText != null) gameOverLoseText.gameObject.SetActive(false);
 		}
 
 		public void ShowToast(string message, string kind = "info", int seconds = 0)
@@ -113,6 +223,15 @@ namespace ManaGambit
 			{
 				Debug.Log($"[HUD][toast][{kind}] {message}");
 			}
+			
+			// Show toast canvas group
+			if (toastCanvasGroup != null)
+			{
+				toastCanvasGroup.alpha = 1f;
+				toastCanvasGroup.interactable = true;
+				toastCanvasGroup.blocksRaycasts = true;
+			}
+			
 			// cancel any previous hide task
 			CleanupToastCts();
 			toastCts = new System.Threading.CancellationTokenSource();
@@ -139,11 +258,20 @@ namespace ManaGambit
 		public void HideToast()
 		{
 			if (toastText != null) toastText.enabled = false;
+			
+			// Hide toast canvas group
+			if (toastCanvasGroup != null)
+			{
+				toastCanvasGroup.alpha = 0f;
+				toastCanvasGroup.interactable = false;
+				toastCanvasGroup.blocksRaycasts = false;
+			}
 		}
 
 		private void OnDestroy()
 		{
 			CleanupToastCts();
+			CleanupCountdownCts();
 		}
 
 		public void UpdateMana(string playerId, float mana)

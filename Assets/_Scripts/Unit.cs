@@ -30,6 +30,7 @@ namespace ManaGambit
 
         private CancellationTokenSource moveCts;
         private const float DefaultMoveDurationSeconds = 1f;
+        private const float InstantMoveThresholdSeconds = 0.0001f;
         private const int DefaultBasicActionIndex = 0;
 
         public Vector2Int CurrentPosition => currentPosition;
@@ -60,6 +61,10 @@ namespace ManaGambit
 
         private UnitState currentState = UnitState.Idle;
 
+        // Damage numbers (DamageNumbersPro)
+        [SerializeField] private DamageNumbersPro.DamageNumber damageNumberPrefab;
+        [Min(0f)][SerializeField] private float damageNumberHeightOffset = 1.5f;
+
         private void Awake()
         {
             unitAnimator = GetComponent<ManaGambit.UnitAnimator>();
@@ -82,7 +87,6 @@ namespace ManaGambit
         public async UniTask MoveTo(Vector2Int target, float durationSeconds, float initialProgress)
         {
             Debug.Log($"{name} MoveTo {target} duration={durationSeconds} initialProgress={initialProgress}");
-            SetState(UnitState.Moving);
 
             if (moveCts != null)
             {
@@ -100,13 +104,16 @@ namespace ManaGambit
 
             try
             {
-                if (total <= 0.0001f || initialProgress >= 1f)
+                if (total <= InstantMoveThresholdSeconds || initialProgress >= 1f)
                 {
                     transform.position = endPos;
                     currentPosition = target;
                     SetState(UnitState.Idle);
                     return;
                 }
+
+                // Only enter Moving state when we will actually animate over time
+                SetState(UnitState.Moving);
 
                 while (elapsed < total)
                 {
@@ -258,11 +265,21 @@ namespace ManaGambit
 		{
 			try
 			{
-				var prefab = GetComponentInChildren<DamageNumbersPro.DamageNumber>(true);
-				if (prefab != null)
+				var pos = transform.position + Vector3.up * damageNumberHeightOffset;
+				// Preferred: use assigned prefab field if present (doesn't need to be a child)
+				var assignedField = damageNumberPrefab;
+				if (assignedField != null)
 				{
-					var pos = transform.position + Vector3.up * 1.5f;
-					prefab.Spawn(pos, (float)amount);
+					assignedField.Spawn(pos, (float)amount);
+				}
+				else
+				{
+					// Fallback: find a DamageNumber in children
+					var prefab = GetComponentInChildren<DamageNumbersPro.DamageNumber>(true);
+					if (prefab != null)
+					{
+						prefab.Spawn(pos, (float)amount);
+					}
 				}
 			}
 			catch { }

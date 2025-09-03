@@ -2,6 +2,7 @@
 using System;
 using GameDevWare.Serialization;
 using Newtonsoft.Json.Linq;
+using System.Collections.Generic;
 
 namespace ManaGambit
 {
@@ -37,6 +38,7 @@ namespace ManaGambit
 	{
 		public int startTick;
 		public BoardData board;
+		public Dictionary<string, float> playerMana;
 	}
 
 	[Serializable]
@@ -248,6 +250,7 @@ namespace ManaGambit
 		public int serverTick;
 		public int startTick;
 		public BoardData board;
+		public Dictionary<string, float> playerMana;
 		// public Dictionary<string, float> playerMana; // not used now
 		// NOTE: server currently sends 'countdown' as a string token instead of an object
 		// Using loose-typed field to accept both string and object tokens

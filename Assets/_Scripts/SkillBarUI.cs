@@ -13,6 +13,7 @@ namespace ManaGambit
 		[SerializeField] private Button[] slotButtons = new Button[SkillSlotCount];
 		[SerializeField] private Image[] slotImages = new Image[SkillSlotCount];
 		[SerializeField] private TextMeshProUGUI[] slotTexts = new TextMeshProUGUI[SkillSlotCount];
+		[SerializeField] private Image[] slotSelectionOverlays = new Image[SkillSlotCount];
 		[SerializeField] private Sprite[] iconLibrary; // Assign all skill sprites here; keyed by sprite.name
 		[SerializeField] private Sprite defaultSkillSprite;
 		[SerializeField] private bool debugIcons = false;
@@ -88,6 +89,15 @@ namespace ManaGambit
 		{
 			boundUnit = unit;
 			Refresh();
+		}
+
+		public void SetSelectedSkillIndex(int index)
+		{
+			for (int i = 0; i < SkillSlotCount; i++)
+			{
+				var overlay = (slotSelectionOverlays != null && i < slotSelectionOverlays.Length) ? slotSelectionOverlays[i] : null;
+				if (overlay != null) overlay.enabled = (i == index);
+			}
 		}
 
 		public void Clear()
@@ -216,6 +226,8 @@ namespace ManaGambit
 					button.onClick.RemoveAllListeners();
 					button.interactable = false;
 				}
+				var overlay = (slotSelectionOverlays != null && i < slotSelectionOverlays.Length) ? slotSelectionOverlays[i] : null;
+				if (overlay != null) overlay.enabled = false;
 			}
 		}
 
@@ -367,31 +379,20 @@ namespace ManaGambit
 		private Sprite ResolveIconForAction(UnitConfig.ActionInfo action, int actionIndex)
 		{
 			if (action == null) return null;
-			// Priority: explicit icon key -> shortDisplayName -> name -> type/index fallbacks
+
+			// Priority 1: explicit icon key
 			var s = ResolveIcon(action.icon);
 			if (s != null) return s;
-			s = ResolveIcon(action.shortDisplayName);
-			if (s != null) return s;
-			s = ResolveIcon(action.name);
-			if (s != null) return s;
-			// Try type-based generic keys like "basic", "skill1", "skill2", "ult"
-			if (!string.IsNullOrEmpty(action.type))
+
+			// Priority 2: action name if explicit icon key not found or not provided
+			if (!string.IsNullOrEmpty(action.name))
 			{
-				s = ResolveIcon(action.type);
-				if (s != null) return s;
-				// index-suffixed variant
-				s = ResolveIcon(action.type + (actionIndex + 1).ToString());
+				s = ResolveIcon(action.name);
 				if (s != null) return s;
 			}
-			// Gacha: sometimes basic at index 0 without explicit type
-			if (actionIndex == 0)
-			{
-				s = ResolveIcon("basic");
-				if (s != null) return s;
-				s = ResolveIcon("skill1");
-				if (s != null) return s;
-			}
-			return null;
+
+			// No suitable icon found
+			return defaultSkillSprite;
 		}
 
 		private static string NormalizeKey(string key)
@@ -472,16 +473,19 @@ namespace ManaGambit
 		private static string GetActionDisplayName(UnitConfig.ActionInfo action, int index)
 		{
 			if (action == null) return string.Empty;
-			if (!string.IsNullOrEmpty(action.shortDisplayName)) return action.shortDisplayName;
-			if (!string.IsNullOrEmpty(action.name)) return action.name;
-			if (!string.IsNullOrEmpty(action.type))
+			int cost = Mathf.Max(0, action.manaCost);
+			string baseName;
+			if (!string.IsNullOrEmpty(action.shortDisplayName)) baseName = action.shortDisplayName;
+			else if (!string.IsNullOrEmpty(action.name)) baseName = action.name;
+			else if (!string.IsNullOrEmpty(action.type))
 			{
-				if (action.type == "basic") return "Basic";
-				if (action.type == "ult") return "Ult";
-				if (action.type == "skill") return $"Skill {index + 1}";
-				return action.type;
+				if (action.type == "basic") baseName = "Basic";
+				else if (action.type == "ult") baseName = "Ult";
+				else if (action.type == "skill") baseName = $"Skill {index + 1}";
+				else baseName = action.type;
 			}
-			return $"Skill {index + 1}";
+			else baseName = $"Skill {index + 1}";
+			return $"{baseName} ({cost})";
 		}
 
 		// ( Mana display moved to ManaBarUI )

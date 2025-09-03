@@ -12,6 +12,7 @@ namespace ManaGambit
         private const string AttackStateName = "Attack";
         private const string WindUpStateName = "WindUp"; // optional; falls back if missing
         private const int BaseLayerIndex = 0; // Avoid magic number for base layer
+        private const float ImmediateTransitionDuration = 0f; // Instant blend to avoid visible slide before pose
 
         private void Awake()
         {
@@ -64,8 +65,10 @@ namespace ManaGambit
 
             if (hasByName || hasByFullPath)
             {
-                // Use the string overload to avoid ambiguity between simple and full path hashes
-                animator.Play(stateName, BaseLayerIndex);
+                // Ensure immediate visual switch to prevent movement starting while still in Idle pose
+                animator.CrossFadeInFixedTime(stateName, ImmediateTransitionDuration, BaseLayerIndex, 0f);
+                // Force-sample this frame so pose updates before any same-frame movement
+                animator.Update(0f);
                 return true;
             }
 

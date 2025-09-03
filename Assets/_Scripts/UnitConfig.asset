@@ -12,7 +12,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 268899c761707ee489d987a86fe3b914, type: 3}
   m_Name: UnitConfig
   m_EditorClassIdentifier: Assembly-CSharp::ManaGambit.UnitConfig
-  jsonAsset: {fileID: 4900000, guid: 899461d634d06ab47a2c7b8a718f0a64, type: 3}
+  jsonAsset: {fileID: 4900000, guid: 35c83f83e93d9804db9dbd58244997a2, type: 3}
   loadOnEnable: 1
   units:
   - pieceId: Knight
@@ -45,7 +45,7 @@ MonoBehaviour:
     - name: Slash
       shortDisplayName: Slash
       type: basic
-      icon: Attack_Melee
+      icon: Skill_SwordSplash
       windUpMs: 250
       cooldownMs: 500
       manaCost: 1
@@ -83,6 +83,7 @@ MonoBehaviour:
         interval: 0
         duration: 0
         requireLos: 0
+        allowFriendlyTarget: 0
       move:
         manaCost: 0
         patterns: []
@@ -125,7 +126,7 @@ MonoBehaviour:
     - name: Charge
       shortDisplayName: Charge
       type: skill
-      icon: Skill_MeleeFistHit
+      icon: Skill_Charge
       windUpMs: 250
       cooldownMs: 500
       manaCost: 2
@@ -163,6 +164,7 @@ MonoBehaviour:
         interval: 0
         duration: 0
         requireLos: 0
+        allowFriendlyTarget: 0
       move:
         manaCost: 0
         patterns:
@@ -243,6 +245,7 @@ MonoBehaviour:
         interval: 0
         duration: 0
         requireLos: 0
+        allowFriendlyTarget: 0
       move:
         manaCost: 0
         patterns: []
@@ -312,7 +315,7 @@ MonoBehaviour:
     - name: Arrow Shot
       shortDisplayName: Arrow Shot
       type: basic
-      icon: Attack_Ranged
+      icon: Skill_WindArrow
       windUpMs: 250
       cooldownMs: 500
       manaCost: 1
@@ -350,6 +353,7 @@ MonoBehaviour:
         interval: 0
         duration: 0
         requireLos: 0
+        allowFriendlyTarget: 0
       move:
         manaCost: 0
         patterns: []
@@ -430,6 +434,7 @@ MonoBehaviour:
         interval: 200
         duration: 400
         requireLos: 0
+        allowFriendlyTarget: 0
       move:
         manaCost: 0
         patterns: []
@@ -510,6 +515,7 @@ MonoBehaviour:
         interval: 250
         duration: 0
         requireLos: 0
+        allowFriendlyTarget: 0
       move:
         manaCost: 0
         patterns: []
@@ -579,7 +585,7 @@ MonoBehaviour:
     - name: Bolt
       shortDisplayName: Bolt
       type: basic
-      icon: Attack_Magic
+      icon: Skill_FireBall
       windUpMs: 250
       cooldownMs: 500
       manaCost: 1
@@ -617,6 +623,7 @@ MonoBehaviour:
         interval: 0
         duration: 0
         requireLos: 0
+        allowFriendlyTarget: 0
       move:
         manaCost: 0
         patterns: []
@@ -697,6 +704,7 @@ MonoBehaviour:
         interval: 0
         duration: 0
         requireLos: 0
+        allowFriendlyTarget: 0
       move:
         manaCost: 0
         patterns: []
@@ -739,7 +747,7 @@ MonoBehaviour:
     - name: Rain of Fire
       shortDisplayName: Rain of Fire
       type: skill
-      icon: Skill_FireElement
+      icon: Skill_MeteorRain
       windUpMs: 500
       cooldownMs: 10000
       manaCost: 3
@@ -777,6 +785,7 @@ MonoBehaviour:
         interval: 200
         duration: 300
         requireLos: 0
+        allowFriendlyTarget: 0
       move:
         manaCost: 0
         patterns: []
@@ -819,7 +828,7 @@ MonoBehaviour:
     - name: Arcane Surge
       shortDisplayName: Arcane Surge
       type: ult
-      icon: Skill_ArcaneSurge
+      icon: Skill_ArcaneKnowledge
       windUpMs: 250
       cooldownMs: 10000
       manaCost: 0
@@ -851,6 +860,7 @@ MonoBehaviour:
         interval: 0
         duration: 0
         requireLos: 0
+        allowFriendlyTarget: 0
       move:
         manaCost: 0
         patterns: []
@@ -920,7 +930,7 @@ MonoBehaviour:
     - name: Leap-Strike
       shortDisplayName: Leap-Strike
       type: basic
-      icon: Attack_Leap
+      icon: Whisk_Dash
       windUpMs: 250
       cooldownMs: 500
       manaCost: 1
@@ -958,6 +968,7 @@ MonoBehaviour:
         interval: 0
         duration: 0
         requireLos: 0
+        allowFriendlyTarget: 0
       move:
         manaCost: 0
         patterns:
@@ -1044,6 +1055,7 @@ MonoBehaviour:
         interval: 0
         duration: 0
         requireLos: 0
+        allowFriendlyTarget: 0
       move:
         manaCost: 0
         patterns:
@@ -1092,7 +1104,7 @@ MonoBehaviour:
     - name: Phantom Flurry
       shortDisplayName: Phantom Flurry
       type: ult
-      icon: Skill_PhantomFlurry
+      icon: Skill_ShadowDagger
       windUpMs: 250
       cooldownMs: 10000
       manaCost: 0
@@ -1130,6 +1142,7 @@ MonoBehaviour:
         interval: 0
         duration: 0
         requireLos: 0
+        allowFriendlyTarget: 0
       move:
         manaCost: 0
         patterns:
@@ -1205,7 +1218,7 @@ MonoBehaviour:
     - name: Rifle Shot
       shortDisplayName: Rifle Shot
       type: basic
-      icon: Attack_Rifle
+      icon: Skill_GunShoot
       windUpMs: 250
       cooldownMs: 500
       manaCost: 1
@@ -1243,6 +1256,7 @@ MonoBehaviour:
         interval: 0
         duration: 0
         requireLos: 0
+        allowFriendlyTarget: 0
       move:
         manaCost: 0
         patterns: []
@@ -1285,7 +1299,7 @@ MonoBehaviour:
     - name: Piercing Shot
       shortDisplayName: Piercing
       type: skill
-      icon: Skill_MultiArrowShoot
+      icon: Skill_BombardShot
       windUpMs: 350
       cooldownMs: 500
       manaCost: 3
@@ -1323,6 +1337,7 @@ MonoBehaviour:
         interval: 0
         duration: 0
         requireLos: 0
+        allowFriendlyTarget: 0
       move:
         manaCost: 0
         patterns: []
@@ -1365,7 +1380,7 @@ MonoBehaviour:
     - name: Sniper Shot
       shortDisplayName: Snipe
       type: ult
-      icon: Skill_LockAndLoad
+      icon: Skill_MonsteHunter
       windUpMs: 250
       cooldownMs: 10000
       manaCost: 0
@@ -1403,6 +1418,7 @@ MonoBehaviour:
         interval: 0
         duration: 0
         requireLos: 0
+        allowFriendlyTarget: 0
       move:
         manaCost: 0
         patterns: []
@@ -1472,7 +1488,7 @@ MonoBehaviour:
     - name: Punch
       shortDisplayName: Punch
       type: basic
-      icon: Attack_Punch
+      icon: Skill_MeleeFistHit
       windUpMs: 250
       cooldownMs: 500
       manaCost: 1
@@ -1510,6 +1526,7 @@ MonoBehaviour:
         interval: 0
         duration: 0
         requireLos: 0
+        allowFriendlyTarget: 0
       move:
         manaCost: 0
         patterns: []
@@ -1552,7 +1569,7 @@ MonoBehaviour:
     - name: Uppercut
       shortDisplayName: Uppercut
       type: skill
-      icon: Skill_ThousandBlows
+      icon: Skill_MeleeFistHit
       windUpMs: 350
       cooldownMs: 500
       manaCost: 2
@@ -1590,6 +1607,7 @@ MonoBehaviour:
         interval: 0
         duration: 0
         requireLos: 0
+        allowFriendlyTarget: 0
       move:
         manaCost: 0
         patterns: []
@@ -1632,7 +1650,7 @@ MonoBehaviour:
     - name: Swap
       shortDisplayName: Swap
       type: skill
-      icon: Skill_Swap
+      icon: Skill_SwapPosition
       windUpMs: 0
       cooldownMs: 0
       manaCost: 0
@@ -1664,6 +1682,7 @@ MonoBehaviour:
         interval: 0
         duration: 0
         requireLos: 0
+        allowFriendlyTarget: 0
       move:
         manaCost: 0
         patterns: []
@@ -1712,7 +1731,7 @@ MonoBehaviour:
     - name: Rally
       shortDisplayName: Rally
       type: ult
-      icon: Skill_Rally
+      icon: Skill_Flags
       windUpMs: 250
       cooldownMs: 10000
       manaCost: 0
@@ -1744,6 +1763,7 @@ MonoBehaviour:
         interval: 0
         duration: 0
         requireLos: 0
+        allowFriendlyTarget: 0
       move:
         manaCost: 0
         patterns: []
