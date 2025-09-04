@@ -157,14 +157,21 @@ namespace ManaGambit
 			if (remaining > 0) StartCountdown(remaining); else StopCountdown();
 		}
 
-		private async UniTaskVoid RunCountdownSeconds(int seconds, System.Threading.CancellationToken token)
+		private async UniTask RunCountdownSeconds(int seconds, System.Threading.CancellationToken token)
 		{
 			try
 			{
 				int remaining = Mathf.Max(0, seconds);
 				while (remaining > 0)
 				{
-					await UniTask.Delay(OneSecondMs, cancellationToken: token);
+					await UniTask.Delay(OneSecondMs, ignoreTimeScale: true, cancellationToken: token);
+					
+					// Check cancellation immediately after delay to avoid stale UI updates
+					if (token.IsCancellationRequested)
+					{
+						break;
+					}
+					
 					remaining = Mathf.Max(0, remaining - 1);
 					UpdateCountdownTimer(remaining);
 				}
@@ -213,6 +220,11 @@ namespace ManaGambit
 
 		public void ShowToast(string message, string kind = "info", int seconds = 0)
 		{
+			UniTask.Void(async () => await ShowToastAsync(message, kind, seconds));
+		}
+
+		private async UniTask ShowToastAsync(string message, string kind = "info", int seconds = 0)
+		{
 			if (seconds <= 0) seconds = Mathf.Max(1, defaultToastSeconds);
 			if (toastText != null)
 			{
@@ -235,14 +247,20 @@ namespace ManaGambit
 			// cancel any previous hide task
 			CleanupToastCts();
 			toastCts = new System.Threading.CancellationTokenSource();
-			HideToastAfterDelay(seconds, toastCts.Token).Forget();
+			await HideToastAfterDelay(seconds, toastCts.Token);
 		}
 
-		private async UniTaskVoid HideToastAfterDelay(int seconds, System.Threading.CancellationToken token)
+		private async UniTask HideToastAfterDelay(int seconds, System.Threading.CancellationToken token)
 		{
+			if (seconds <= 0)
+			{
+				HideToast();
+				return;
+			}
+			
 			try
 			{
-				await UniTask.Delay(seconds * 1000, cancellationToken: token);
+				await UniTask.Delay(seconds * OneSecondMs, ignoreTimeScale: true, cancellationToken: token);
 				HideToast();
 			}
 			catch (System.OperationCanceledException)
@@ -257,6 +275,9 @@ namespace ManaGambit
 
 		public void HideToast()
 		{
+			// Cancel any pending hide tasks and release resources
+			CleanupToastCts();
+			
 			if (toastText != null) toastText.enabled = false;
 			
 			// Hide toast canvas group
@@ -268,12 +289,12 @@ namespace ManaGambit
 			}
 		}
 
-		private void OnDestroy()
-		{
-			CleanupToastCts();
-			CleanupCountdownCts();
-		}
-
+        private void OnDestroy()
+        {
+            if (Instance == this) Instance = null;
+            CleanupToastCts();
+            CleanupCountdownCts();
+        }
 		public void UpdateMana(string playerId, float mana)
 		{
 			// Placeholder hook; integrate with mana UI when available

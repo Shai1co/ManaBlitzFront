@@ -96,7 +96,7 @@ namespace ManaGambit
 						if (Board.Instance.TryGetBoardSlot(kv.Key, out var bs) && bs != null && bs.IsOccupied && bs.Occupant != null)
 						{
 							// Team targets are determined by comparing the occupant's OwnerId to the unit's OwnerId (consistent with other ownership checks)
-							bool isFriendly = string.Equals(bs.Occupant.OwnerId, unit.OwnerId);
+							bool isFriendly = IsFriendly(unit.OwnerId, bs.Occupant.OwnerId);
 							if (isFriendly) result.Add(kv.Key);
 						}
 					}
@@ -161,6 +161,11 @@ namespace ManaGambit
 			return list;
 		}
 
+		private static bool IsFriendly(string unitOwnerId, string otherOwnerId)
+		{
+			return string.Equals(unitOwnerId, otherOwnerId);
+		}
+
 		private static void TraceInDirection(Vector2Int origin, Vector2Int step, int minRange, int maxRange, bool leap, bool stopOnHit, bool overFriendly, bool overEnemy, HashSet<Vector2Int> result)
 		{
 			if (maxRange < 1) return;
@@ -219,7 +224,7 @@ namespace ManaGambit
 						{
 							if (Board.Instance.TryGetBoardSlot(cur, out var bs) && bs.IsOccupied && bs.Occupant != null)
 							{
-								bool isFriendlyHere = string.Equals(bs.Occupant.OwnerId, unit.OwnerId);
+								bool isFriendlyHere = IsFriendly(unit.OwnerId, bs.Occupant.OwnerId);
 								// Collect enemy cells; allow friendly only if explicitly permitted by allowFriendlyTarget
 								if (!isFriendlyHere || allowFriendlyTarget)
 								{
@@ -239,7 +244,7 @@ namespace ManaGambit
 							if (!Board.Instance.TryGetSlot(nx, out var _)) continue;
 							// Determine occupancy and friendliness
 							bool occ = Board.Instance.TryGetBoardSlot(nx, out var nbs) && nbs.IsOccupied && nbs.Occupant != null;
-							bool isFriendlyNext = occ && string.Equals(nbs.Occupant.OwnerId, unit.OwnerId);
+							bool isFriendlyNext = occ && IsFriendly(unit.OwnerId, nbs.Occupant.OwnerId);
 							int nextRemainingPierce = remainingPierce;
 							bool nextStopped = false;
 
@@ -290,12 +295,12 @@ namespace ManaGambit
 					bool occupied = bs != null && bs.IsOccupied && bs.Occupant != null;
 					if (dist >= minRange && occupied)
 					{
-						bool isFriendly = AuthManager.Instance != null && string.Equals(bs.Occupant.OwnerId, AuthManager.Instance.UserId);
+						bool isFriendly = IsFriendly(unit.OwnerId, bs.Occupant.OwnerId);
 						if (!isFriendly || allowFriendlyTarget) collect.Add(cur);
 					}
 					if (occupied && !passThrough)
 					{
-						bool canPass = (AuthManager.Instance != null && bs.Occupant != null && string.Equals(bs.Occupant.OwnerId, AuthManager.Instance.UserId)) ? overFriendly : overEnemy;
+						bool canPass = IsFriendly(unit.OwnerId, bs.Occupant.OwnerId) ? overFriendly : overEnemy;
 						if (!canPass)
 						{
 							if (stopOnHit) break;
@@ -341,7 +346,7 @@ namespace ManaGambit
 							bool occ = Board.Instance.TryGetBoardSlot(nx, out var nbs) && nbs.IsOccupied && nbs.Occupant != null;
 							if (occ)
 							{
-								bool isFriendly = AuthManager.Instance != null && string.Equals(nbs.Occupant.OwnerId, AuthManager.Instance.UserId);
+								bool isFriendly = IsFriendly(unit.OwnerId, nbs.Occupant.OwnerId);
 								bool canTraverse = isFriendly ? overFriendly : overEnemy;
 								if (!canTraverse) continue;
 							}
@@ -366,7 +371,7 @@ namespace ManaGambit
 					bool occupied = bs.IsOccupied && bs.Occupant != null;
 					if (occupied)
 					{
-						bool isFriendly = AuthManager.Instance != null && string.Equals(bs.Occupant.OwnerId, AuthManager.Instance.UserId);
+						bool isFriendly = IsFriendly(unit.OwnerId, bs.Occupant.OwnerId);
 						bool canTraverse = isFriendly ? overFriendly : overEnemy;
 						if (!canTraverse) break;
 						// can traverse, but cannot land here
@@ -380,37 +385,37 @@ namespace ManaGambit
 			}
 		}
 
-        private static void TraceForSwap(Unit unit, UnitConfig.MovePattern pattern, bool targetFriendly, bool overFriendly, bool overEnemy, HashSet<Vector2Int> collect)
-        {
-            if (pattern == null) return;
-            var origin = unit.CurrentPosition;
-            var dirs = GetDirections(pattern.dir, unit.OwnerId);
-            for (int d = 0; d < dirs.Count; d++)
-            {
-                var step = dirs[d];
-                var current = origin;
-                // Respect minimum range before collecting targets
-                int minRange = Mathf.Max(1, pattern.rangeMin);
-                int maxRange = Mathf.Max(minRange, pattern.rangeMax);
-                for (int dist = 1; dist <= maxRange; dist++)
-                {
-                    current = new Vector2Int(current.x + step.x, current.y + step.y);
-                    if (!Board.Instance.TryGetBoardSlot(current, out var bs)) break;
-                    bool occupied = bs.IsOccupied && bs.Occupant != null;
-                    if (occupied)
-                    {
-                        bool isFriendly = bs.Occupant.OwnerId == unit.OwnerId;
-                        // Only collect if we've reached or passed the minimum range
-                        if (dist >= minRange && ((targetFriendly && isFriendly) || (!targetFriendly && !isFriendly)))
-                        {
-                            collect.Add(current);
-                            break; // can swap at first encountered valid unit
-                        }
-                        // still allow traversal if passing over is permitted
-                        bool canPass = isFriendly ? overFriendly : overEnemy;
-                        if (!canPass) break;
-                    }
-                }
-            }
-        }	}
+		private static void TraceForSwap(Unit unit, UnitConfig.MovePattern pattern, bool targetFriendly, bool overFriendly, bool overEnemy, HashSet<Vector2Int> collect)
+		{
+			if (pattern == null) return;
+			var origin = unit.CurrentPosition;
+			var dirs = GetDirections(pattern.dir, unit.OwnerId);
+			for (int d = 0; d < dirs.Count; d++)
+			{
+				var step = dirs[d];
+				var current = origin;
+				// Respect minimum range before collecting targets
+				int minRange = Mathf.Max(1, pattern.rangeMin);
+				int maxRange = Mathf.Max(minRange, pattern.rangeMax);
+				for (int dist = 1; dist <= maxRange; dist++)
+				{
+					current = new Vector2Int(current.x + step.x, current.y + step.y);
+					if (!Board.Instance.TryGetBoardSlot(current, out var bs)) break;
+					bool occupied = bs.IsOccupied && bs.Occupant != null;
+					if (occupied)
+					{
+						bool isFriendly = IsFriendly(unit.OwnerId, bs.Occupant.OwnerId);
+						// Only collect if we've reached or passed the minimum range
+						if (dist >= minRange && ((targetFriendly && isFriendly) || (!targetFriendly && !isFriendly)))
+						{
+							collect.Add(current);
+							break; // can swap at first encountered valid unit
+						}
+						// still allow traversal if passing over is permitted
+						bool canPass = isFriendly ? overFriendly : overEnemy;
+						if (!canPass) break;
+					}
+				}
+			}
+		}	}
 }

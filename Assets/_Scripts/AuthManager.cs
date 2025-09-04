@@ -3,6 +3,7 @@ using UnityEngine;
 using UnityEngine.Networking;
 using Cysharp.Threading.Tasks;
 using System;
+using System.Text.RegularExpressions;
 
 namespace ManaGambit
 {
@@ -11,6 +12,8 @@ namespace ManaGambit
         private const string LogTag = "[AuthManager]";
         private const string RegisterPath = "auth/register";
         private const string LoginPath = "auth/login";
+        private const int MaxLogBodyLength = 512;
+        private static readonly string[] SensitiveKeys = new[] { "password", "token", "access_token", "refresh_token", "authorization" };
         public static AuthManager Instance { get; private set; }
 
         // Server URL is now centralized in ServerConfig
@@ -33,33 +36,50 @@ namespace ManaGambit
             string url = ServerConfig.ServerUrl + RegisterPath;
             var payload = new RegisterRequest { email = email, password = password, username = username };
             string json = JsonUtility.ToJson(payload);
-            Debug.Log($"{LogTag} POST {url} body={json}");
-            var request = new UnityWebRequest(url, "POST");
+            string sanitizedRequestBody = SanitizeForLog(json);
+            Debug.Log($"{LogTag} POST {url} body={sanitizedRequestBody}");
+            using var request = new UnityWebRequest(url, "POST");
             byte[] body = System.Text.Encoding.UTF8.GetBytes(json);
             request.uploadHandler = new UploadHandlerRaw(body);
             request.downloadHandler = new DownloadHandlerBuffer();
             request.SetRequestHeader("Content-Type", "application/json");
-
-            var operation = request.SendWebRequest();
-            await UniTask.WaitUntil(() => operation.isDone);
-
-            Debug.Log($"{LogTag} Register responseCode={(long)request.responseCode} result={request.result} error={request.error} body={request.downloadHandler.text}");
+            request.SetRequestHeader("Accept", "application/json");
+            request.timeout = 30;
+            await request.SendWebRequest().ToUniTask();            string sanitizedRegisterResponse = SanitizeForLog(request.downloadHandler.text);
+            Debug.Log($"{LogTag} Register responseCode={(long)request.responseCode} result={request.result} error={request.error} body={sanitizedRegisterResponse}");
             if (request.result != UnityWebRequest.Result.Success)
             {
                 Debug.LogError($"{LogTag} Register failed: {request.error} (HTTP {(long)request.responseCode})");
                 return false;
             }
 
+            // Check if response body is empty before parsing
+            if (string.IsNullOrEmpty(request.downloadHandler.text))
+            {
+                Debug.LogError($"{LogTag} Register failed: Empty response body");
+                return false;
+            }
+
             try
             {
                 var response = JsonUtility.FromJson<AuthResponse>(request.downloadHandler.text);
-                Token = response.token;
-                UserId = response.user.id;
-                Debug.Log($"{LogTag} Register success. userId={UserId}");
+                if (ValidateAuthResponse(response, request.downloadHandler.text))
+                {
+                    Token = response.token;
+                    UserId = response.user.id;
+                    Debug.Log($"{LogTag} Register success. userId={UserId}");
+                    return true;
+                }
+                else
+                {
+                    Debug.LogError($"{LogTag} Register failed: Invalid response data");
+                    return false;
+                }
             }
             catch (Exception ex)
             {
-                Debug.LogError($"{LogTag} Failed to parse register response: {ex}\nBody: {request.downloadHandler.text}");
+                string sanitizedBody = SanitizeForLog(request.downloadHandler.text);
+                Debug.LogError($"{LogTag} Failed to parse register response: {ex}\nBody: {sanitizedBody}");
                 return false;
             }
             return true;
@@ -70,36 +90,56 @@ namespace ManaGambit
             string url = ServerConfig.ServerUrl + LoginPath;
             var payload = new LoginRequest { email = email, password = password };
             string json = JsonUtility.ToJson(payload);
-            Debug.Log($"{LogTag} POST {url} body={json}");
+            string sanitizedRequestBody = SanitizeForLog(json);
+            Debug.Log($"{LogTag} POST {url} body={sanitizedRequestBody}");
             var request = new UnityWebRequest(url, "POST");
             byte[] body = System.Text.Encoding.UTF8.GetBytes(json);
             request.uploadHandler = new UploadHandlerRaw(body);
             request.downloadHandler = new DownloadHandlerBuffer();
             request.SetRequestHeader("Content-Type", "application/json");
+            request.SetRequestHeader("Accept", "application/json");
+            request.timeout = 30;
 
             var operation = request.SendWebRequest();
             await UniTask.WaitUntil(() => operation.isDone);
 
-            Debug.Log($"{LogTag} Login responseCode={(long)request.responseCode} result={request.result} error={request.error} body={request.downloadHandler.text}");
+            string sanitizedLoginResponse = SanitizeForLog(request.downloadHandler.text);
+            Debug.Log($"{LogTag} Login responseCode={(long)request.responseCode} result={request.result} error={request.error} body={sanitizedLoginResponse}");
             if (request.result != UnityWebRequest.Result.Success)
             {
                 Debug.LogError($"{LogTag} Login failed: {request.error} (HTTP {(long)request.responseCode})");
                 return false;
             }
 
+            // Check if response body is empty before parsing
+            if (string.IsNullOrEmpty(request.downloadHandler.text))
+            {
+                Debug.LogError($"{LogTag} Login failed: Empty response body");
+                return false;
+            }
+
             try
             {
                 var response = JsonUtility.FromJson<AuthResponse>(request.downloadHandler.text);
-                Token = response.token;
-                UserId = response.user.id;
-                Debug.Log($"{LogTag} Login success. userId={UserId}");
+                if (ValidateAuthResponse(response, request.downloadHandler.text))
+                {
+                    Token = response.token;
+                    UserId = response.user.id;
+                    Debug.Log($"{LogTag} Login success. userId={UserId}");
+                    return true;
+                }
+                else
+                {
+                    Debug.LogError($"{LogTag} Login failed: Invalid response data");
+                    return false;
+                }
             }
             catch (Exception ex)
             {
-                Debug.LogError($"{LogTag} Failed to parse login response: {ex}\nBody: {request.downloadHandler.text}");
+                string sanitizedBody = SanitizeForLog(request.downloadHandler.text);
+                Debug.LogError($"{LogTag} Failed to parse login response: {ex}\nBody: {sanitizedBody}");
                 return false;
             }
-            return true;
         }
 
         public async UniTask<bool> LoginWithUsername(string username, string password)
@@ -107,35 +147,88 @@ namespace ManaGambit
             string url = ServerConfig.ServerUrl + LoginPath;
             var payload = new UsernameLoginRequest { username = username, password = password };
             string json = JsonUtility.ToJson(payload);
-            Debug.Log($"{LogTag} POST {url} body={json}");
+            string sanitizedRequestBody = SanitizeForLog(json);
+            Debug.Log($"{LogTag} POST {url} body={sanitizedRequestBody}");
             var request = new UnityWebRequest(url, "POST");
             byte[] body = System.Text.Encoding.UTF8.GetBytes(json);
             request.uploadHandler = new UploadHandlerRaw(body);
             request.downloadHandler = new DownloadHandlerBuffer();
             request.SetRequestHeader("Content-Type", "application/json");
+            request.SetRequestHeader("Accept", "application/json");
+            request.timeout = 30;
 
             var operation = request.SendWebRequest();
             await UniTask.WaitUntil(() => operation.isDone);
 
-            Debug.Log($"{LogTag} Login responseCode={(long)request.responseCode} result={request.result} error={request.error} body={request.downloadHandler.text}");
+            string sanitizedUsernameLoginResponse = SanitizeForLog(request.downloadHandler.text);
+            Debug.Log($"{LogTag} Login responseCode={(long)request.responseCode} result={request.result} error={request.error} body={sanitizedUsernameLoginResponse}");
             if (request.result != UnityWebRequest.Result.Success)
             {
                 Debug.LogError($"{LogTag} Login failed: {request.error} (HTTP {(long)request.responseCode})");
                 return false;
             }
 
+            // Check if response body is empty before parsing
+            if (string.IsNullOrEmpty(request.downloadHandler.text))
+            {
+                Debug.LogError($"{LogTag} Login failed: Empty response body");
+                return false;
+            }
+
             try
             {
                 var response = JsonUtility.FromJson<AuthResponse>(request.downloadHandler.text);
-                Token = response.token;
-                UserId = response.user.id;
-                Debug.Log($"{LogTag} Login success. userId={UserId}");
+                // Validate response before any state updates to prevent partial assignment
+                if (ValidateAuthResponse(response, request.downloadHandler.text))
+                {
+                    // Both fields are assigned atomically only after validation passes
+                    Token = response.token;
+                    UserId = response.user.id;
+                    Debug.Log($"{LogTag} Login success. userId={UserId}");
+                    return true;
+                }
+                else
+                {
+                    Debug.LogError($"{LogTag} Login failed: Invalid response data");
+                    return false;
+                }
             }
             catch (Exception ex)
             {
-                Debug.LogError($"{LogTag} Failed to parse login response: {ex}\\nBody: {request.downloadHandler.text}");
+                string sanitizedBody = SanitizeForLog(request.downloadHandler.text);
+                Debug.LogError($"{LogTag} Failed to parse login response: {ex}\nBody: {sanitizedBody}");
                 return false;
             }
+        }
+        private bool ValidateAuthResponse(AuthResponse response, string responseText)
+        {
+            if (response == null)
+            {
+                Debug.LogError($"{LogTag} Auth response is null");
+                return false;
+            }
+
+            if (string.IsNullOrEmpty(response.token))
+            {
+                string sanitizedBody = SanitizeForLog(responseText);
+                Debug.LogError($"{LogTag} Auth response missing or empty token. Response: {sanitizedBody}");
+                return false;
+            }
+
+            if (response.user == null)
+            {
+                string sanitizedBody = SanitizeForLog(responseText);
+                Debug.LogError($"{LogTag} Auth response missing user object. Response: {sanitizedBody}");
+                return false;
+            }
+
+            if (string.IsNullOrEmpty(response.user.id))
+            {
+                string sanitizedBody = SanitizeForLog(responseText);
+                Debug.LogError($"{LogTag} Auth response missing or empty user ID. Response: {sanitizedBody}");
+                return false;
+            }
+
             return true;
         }
 
@@ -174,6 +267,28 @@ namespace ManaGambit
         {
             public string username;
             public string password;
+        }
+
+        private static string SanitizeForLog(string input)
+        {
+            if (string.IsNullOrEmpty(input))
+            {
+                return input;
+            }
+
+            string sanitized = input;
+            foreach (var key in SensitiveKeys)
+            {
+                sanitized = Regex.Replace(sanitized, "(?i)(\"" + key + "\"\\s*:\\s*)\"([^\"]*)\"", "$1\"***REDACTED***\"");
+                sanitized = Regex.Replace(sanitized, "(?i)(\"" + key + "\"\\s*:\\s*)(\\{[\\s\\S]*?\\}|\\[[\\s\\S]*?\\]|true|false|null|\\d+)", "$1\"***REDACTED***\"");
+            }
+
+            if (sanitized.Length > MaxLogBodyLength)
+            {
+                return sanitized.Substring(0, MaxLogBodyLength) + "...(truncated)";
+            }
+
+            return sanitized;
         }
     }
 }

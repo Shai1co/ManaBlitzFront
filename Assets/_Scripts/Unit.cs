@@ -29,9 +29,16 @@ namespace ManaGambit
         [SerializeField] private string ownerId = "";
 
         private CancellationTokenSource moveCts;
+        private CancellationTokenSource _actionCts;
         private const float DefaultMoveDurationSeconds = 1f;
         private const float InstantMoveThresholdSeconds = 0.0001f;
         private const int DefaultBasicActionIndex = 0;
+
+        // Events to coordinate UI/highlights with gameplay actions
+        public event Action<Unit> OnMoveStarted;
+        public event Action<Unit> OnMoveCompleted;
+        public event Action<Unit> OnSkillStarted;
+        public event Action<Unit> OnSkillCompleted;
 
         public Vector2Int CurrentPosition => currentPosition;
 
@@ -106,18 +113,27 @@ namespace ManaGambit
             {
                 if (total <= InstantMoveThresholdSeconds || initialProgress >= 1f)
                 {
+                    OnMoveStarted?.Invoke(this);
                     transform.position = endPos;
                     currentPosition = target;
                     SetState(UnitState.Idle);
+                    OnMoveCompleted?.Invoke(this);
                     return;
                 }
 
                 // Only enter Moving state when we will actually animate over time
                 SetState(UnitState.Moving);
+                OnMoveStarted?.Invoke(this);
 
                 while (elapsed < total)
                 {
-                    if (moveCts.Token.IsCancellationRequested) return;
+                    if (moveCts.Token.IsCancellationRequested)
+                    {
+                        // Ensure lifecycle notification on cancellation and return to Idle
+                        SetState(UnitState.Idle);
+                        OnMoveCompleted?.Invoke(this);
+                        return;
+                    }
 
                     elapsed += Time.deltaTime;
                     float t = Mathf.Clamp01(elapsed / total);
@@ -130,6 +146,7 @@ namespace ManaGambit
                 currentPosition = target;
 
                 SetState(UnitState.Idle);
+                OnMoveCompleted?.Invoke(this);
             }
             finally
             {
@@ -148,6 +165,7 @@ namespace ManaGambit
 
         public async void Attack(Vector2Int target)
         {
+            OnSkillStarted?.Invoke(this);
             transform.LookAt(Board.Instance.GetSlotWorldPosition(target));
 
             // Determine wind-up from config for default/basic action (index 0)
@@ -161,8 +179,25 @@ namespace ManaGambit
             if (windUpMs > 0)
             {
                 SetState(UnitState.WindUp);
-                // Wait for wind-up duration before the hit occurs
-                await UniTask.Delay(windUpMs, cancellationToken: this.GetCancellationTokenOnDestroy());
+                try
+                {
+                    // Create new action cancellation token source
+                    _actionCts?.Cancel();
+                    _actionCts?.Dispose();
+                    _actionCts = new CancellationTokenSource();
+                    
+                    // Create linked token for both destroy and manual cancellation
+                    var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(this.GetCancellationTokenOnDestroy(), _actionCts.Token);
+                    
+                    // Wait for wind-up duration before the hit occurs
+                    await UniTask.Delay(windUpMs, cancellationToken: linkedCts.Token);
+                }
+                catch (OperationCanceledException)
+                {
+                    SetState(UnitState.Idle);
+                    OnSkillCompleted?.Invoke(this);
+                    return;
+                }
             }
 
             SetState(UnitState.Attacking);
@@ -170,11 +205,13 @@ namespace ManaGambit
             // TODO: trigger damage application here once server/client impact exists
 
             SetState(UnitState.Idle);
+            OnSkillCompleted?.Invoke(this);
         }
 
         public async UniTask PlayUseSkill(UseSkillData use)
         {
             if (use == null) return;
+            OnSkillStarted?.Invoke(this);
             var targetCell = use.target != null && use.target.cell != null ? new Vector2Int(use.target.cell.x, use.target.cell.y) : currentPosition;
             transform.LookAt(Board.Instance.GetSlotWorldPosition(targetCell));
 
@@ -195,7 +232,24 @@ namespace ManaGambit
             if (windUpMs > 0)
             {
                 SetState(UnitState.WindUp);
-                await UniTask.Delay(windUpMs, cancellationToken: this.GetCancellationTokenOnDestroy());
+                try
+                {
+                    // Create new action cancellation token source
+                    _actionCts?.Cancel();
+                    _actionCts?.Dispose();
+                    _actionCts = new CancellationTokenSource();
+                    
+                    // Create linked token for both destroy and manual cancellation
+                    var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(this.GetCancellationTokenOnDestroy(), _actionCts.Token);
+                    
+                    await UniTask.Delay(windUpMs, cancellationToken: linkedCts.Token);
+                }
+                catch (OperationCanceledException)
+                {
+                    SetState(UnitState.Idle);
+                    OnSkillCompleted?.Invoke(this);
+                    return;
+                }
             }
 
             SetState(UnitState.Attacking);
@@ -209,10 +263,29 @@ namespace ManaGambit
             }
             if (hitDelayMs > 0)
             {
-                await UniTask.Delay(hitDelayMs, cancellationToken: this.GetCancellationTokenOnDestroy());
+                try
+                {
+                    // Create new action cancellation token source if not already created
+                    if (_actionCts == null)
+                    {
+                        _actionCts = new CancellationTokenSource();
+                    }
+                    
+                    // Create linked token for both destroy and manual cancellation
+                    var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(this.GetCancellationTokenOnDestroy(), _actionCts.Token);
+                    
+                    await UniTask.Delay(hitDelayMs, cancellationToken: linkedCts.Token);
+                }
+                catch (OperationCanceledException)
+                {
+                    SetState(UnitState.Idle);
+                    OnSkillCompleted?.Invoke(this);
+                    return;
+                }
             }
 
             SetState(UnitState.Idle);
+            OnSkillCompleted?.Invoke(this);
         }
 
         public void Stop()
@@ -223,7 +296,14 @@ namespace ManaGambit
                 moveCts.Dispose();
                 moveCts = null;
             }
-            // TODO: Stop other actions if any
+            
+            if (_actionCts != null)
+            {
+                _actionCts.Cancel();
+                _actionCts.Dispose();
+                _actionCts = null;
+            }
+            
             Debug.Log($"{name} stopped");
             SetState(UnitState.Idle);
         }
@@ -378,6 +458,24 @@ namespace ManaGambit
             }
 
             // Additional state-specific logic if needed
+        }
+
+        private void OnDestroy()
+        {
+            // Ensure proper cleanup of cancellation token sources
+            if (moveCts != null)
+            {
+                moveCts.Cancel();
+                moveCts.Dispose();
+                moveCts = null;
+            }
+            
+            if (_actionCts != null)
+            {
+                _actionCts.Cancel();
+                _actionCts.Dispose();
+                _actionCts = null;
+            }
         }
     }
 }

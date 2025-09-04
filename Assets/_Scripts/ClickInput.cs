@@ -15,10 +15,11 @@ namespace ManaGambit
         void SetSelectedSkillIndex(int index);
     }
 
-	public class ClickInput : MonoBehaviour
+	public partial class ClickInput : MonoBehaviour
 	{
 		private const float RaycastMaxDistance = 200f;
 		private const int DefaultSkillIndex = 0;
+		private const int NoSkillIndex = -1; // sentinel for no selected skill
 		[SerializeField] private Camera sceneCamera;
 		[SerializeField] private LayerMask slotLayer;
 		[SerializeField] private LayerMask unitLayer;
@@ -30,11 +31,12 @@ namespace ManaGambit
 		private Unit selectedUnit;
 		private Unit targetingUnit;
 		private bool isTargetingSkill = false;
-		private int pendingSkillIndex = -1;
-		private int currentSelectedSkillIndex = DefaultSkillIndex;
+		private int pendingSkillIndex = NoSkillIndex;
+		private int currentSelectedSkillIndex = NoSkillIndex;
 		[SerializeField] private bool debugInput = false;
 		[SerializeField] private MonoBehaviour skillBarUI; // optional hook for UI updates; must implement ISkillBarUI
 		private ISkillBarUI SkillBar => skillBarUI as ISkillBarUI;
+		private Unit highlightHookUnit; // unit we've attached highlight event hooks to
 
 		private void Awake()
 		{
@@ -112,8 +114,26 @@ namespace ManaGambit
 						if (TryExecuteSkillOnUnit(targetingUnit, unit, pendingSkillIndex))
 						{
 							isTargetingSkill = false;
-							pendingSkillIndex = -1;
+							pendingSkillIndex = NoSkillIndex;
+							// Clear both move and skill highlights on cast start
+							Board.Instance.ClearMoveHighlights();
 							Board.Instance.ClearSkillHighlights();
+							// Clear the selected skill after use
+							currentSelectedSkillIndex = NoSkillIndex;
+							if (SkillBar != null) SkillBar.SetSelectedSkillIndex(currentSelectedSkillIndex);
+							// Restore move/skill previews after the skill completes
+							void RestoreAfterSkill(Unit u)
+							{
+								u.OnSkillCompleted -= RestoreAfterSkill;
+								if (selectedUnit != null && NetworkManager.Instance != null && NetworkManager.Instance.UnitConfigAsset != null)
+								{
+									var legal = LocalTargeting.ComputeMoveTargets(selectedUnit, NetworkManager.Instance.UnitConfigAsset);
+									Board.Instance.HighlightSlots(legal, true);
+									var skillTargets = LocalTargeting.ComputeAttackTargets(selectedUnit, NetworkManager.Instance.UnitConfigAsset, currentSelectedSkillIndex);
+									Board.Instance.HighlightSkillSlots(skillTargets, true);
+								}
+							}
+							targetingUnit.OnSkillCompleted += RestoreAfterSkill;
 							return;
 						}
 					}
@@ -175,24 +195,7 @@ namespace ManaGambit
 					Debug.Log($"[ClickInput] Slot hit '{slotHit.collider.name}' layer={slotHit.collider.gameObject.layer}");
 				}
 				// If not explicitly targeting a skill, allow default/basic skill (index 0) by clicking a valid red-highlighted slot
-				if (!isTargetingSkill && Board.Instance.TryGetCoord(slot, out var toCoord))
-				{
-					var cfg = NetworkManager.Instance != null ? NetworkManager.Instance.UnitConfigAsset : null;
-					if (cfg != null)
-					{
-						var defaultSkillTargets = LocalTargeting.ComputeSkillTargets(selectedUnit, cfg, 0);
-						if (defaultSkillTargets.Contains(toCoord))
-						{
-							if (IntentManager.Instance != null && !string.IsNullOrEmpty(selectedUnit.UnitID))
-							{
-								if (debugInput) Debug.Log($"[ClickInput] Default skill (0) at slot {toCoord} via slot click");
-								var target = new SkillTarget { cell = new Pos { x = toCoord.x, y = toCoord.y } };
-								_ = IntentManager.Instance.SendUseSkillIntent(selectedUnit.UnitID, 0, target);
-								return;
-							}
-						}
-					}
-				}
+				if (!isTargetingSkill && TryExecuteDefaultSkillOnSlot(slot, selectedUnit)) { return; }
 				if (TryIssueMoveToSlot(slot)) { return; }
 				return;
 			}
@@ -208,24 +211,7 @@ namespace ManaGambit
 					if (boardSlot != null) slotTransform = boardSlot.transform;
 				}
 				// If not explicitly targeting a skill, allow default/basic skill (index 0) by clicking a valid red-highlighted slot
-				if (!isTargetingSkill && Board.Instance.TryGetCoord(slotTransform, out var toCoord2))
-				{
-					var cfg = NetworkManager.Instance != null ? NetworkManager.Instance.UnitConfigAsset : null;
-					if (cfg != null)
-					{
-						var defaultSkillTargets = LocalTargeting.ComputeSkillTargets(selectedUnit, cfg, 0);
-						if (defaultSkillTargets.Contains(toCoord2))
-						{
-							if (IntentManager.Instance != null && !string.IsNullOrEmpty(selectedUnit.UnitID))
-							{
-								if (debugInput) Debug.Log($"[ClickInput] Default skill (0) at slot {toCoord2} via fallback slot click");
-								var target = new SkillTarget { cell = new Pos { x = toCoord2.x, y = toCoord2.y } };
-								_ = IntentManager.Instance.SendUseSkillIntent(selectedUnit.UnitID, 0, target);
-								return;
-							}
-						}
-					}
-				}
+				if (!isTargetingSkill && TryExecuteDefaultSkillOnSlot(slotTransform, selectedUnit)) { return; }
 				if (TryIssueMoveToSlot(slotTransform))
 				{
 					if (debugInput) Debug.LogWarning($"[ClickInput] Slot was not on slotLayer; using fallback hit '{anySlotHit.collider.name}'");
@@ -249,7 +235,7 @@ namespace ManaGambit
 			{
 				if (debugInput) Debug.Log("[ClickInput] Cancel targeting on miss (keeping unit selected)");
 				isTargetingSkill = false;
-				pendingSkillIndex = -1;
+				pendingSkillIndex = NoSkillIndex;
 				Board.Instance.ClearSkillHighlights();
 				// Keep the unit selected; do not clear selection/highlights fully
 				return;
@@ -331,12 +317,17 @@ namespace ManaGambit
 			if (previous != null && previous != selectedUnit)
 			{
 				SetUnitSelectionHighlight(previous, false);
+				DetachUnitHighlightHooks();
 			}
 			SetUnitSelectionHighlight(selectedUnit, true);
-			// Reset explicit targeting state when selecting a unit but keep selected skill index
+			AttachUnitHighlightHooks(selectedUnit);
+			// Reset explicit targeting state; only clear selected skill when switching units
 			isTargetingSkill = false;
-			pendingSkillIndex = -1;
-			currentSelectedSkillIndex = DefaultSkillIndex; // default to 0 when a unit is first selected
+			pendingSkillIndex = NoSkillIndex;
+			if (previous != selectedUnit)
+			{
+				currentSelectedSkillIndex = NoSkillIndex;
+			}
 			if (NetworkManager.Instance != null && NetworkManager.Instance.UnitConfigAsset != null)
 			{
 				// Ensure UnitConfig is populated before computing local targets (mirrors JS client readiness)
@@ -372,6 +363,61 @@ namespace ManaGambit
 			}
 		}
 
+		private void AttachUnitHighlightHooks(Unit unit)
+		{
+			if (unit == null) return;
+			DetachUnitHighlightHooks();
+			highlightHookUnit = unit;
+			unit.OnMoveStarted += OnUnitMoveStarted;
+			unit.OnMoveCompleted += OnUnitMoveCompleted;
+			unit.OnSkillStarted += OnUnitSkillStarted;
+			unit.OnSkillCompleted += OnUnitSkillCompleted;
+		}
+
+		private void DetachUnitHighlightHooks()
+		{
+			if (highlightHookUnit == null) return;
+			highlightHookUnit.OnMoveStarted -= OnUnitMoveStarted;
+			highlightHookUnit.OnMoveCompleted -= OnUnitMoveCompleted;
+			highlightHookUnit.OnSkillStarted -= OnUnitSkillStarted;
+			highlightHookUnit.OnSkillCompleted -= OnUnitSkillCompleted;
+			highlightHookUnit = null;
+		}
+
+		private void OnUnitMoveStarted(Unit u)
+		{
+			Board.Instance.ClearMoveHighlights();
+			Board.Instance.ClearSkillHighlights();
+		}
+
+		private void OnUnitSkillStarted(Unit u)
+		{
+			Board.Instance.ClearMoveHighlights();
+			Board.Instance.ClearSkillHighlights();
+		}
+
+		private void OnUnitMoveCompleted(Unit u)
+		{
+			var cfg = NetworkManager.Instance != null ? NetworkManager.Instance.UnitConfigAsset : null;
+			if (cfg == null) return;
+			// Only redraw if this unit is still selected
+			if (u != selectedUnit) return;
+			var legalAfter = LocalTargeting.ComputeMoveTargets(u, cfg);
+			Board.Instance.HighlightSlots(legalAfter, true);
+			var skillTargetsAfter = LocalTargeting.ComputeAttackTargets(u, cfg, currentSelectedSkillIndex);
+			Board.Instance.HighlightSkillSlots(skillTargetsAfter, true);
+		}
+		private void OnUnitSkillCompleted(Unit u)
+		{
+			var cfg = NetworkManager.Instance != null ? NetworkManager.Instance.UnitConfigAsset : null;
+			if (cfg == null) return;
+			if (u != selectedUnit) return;
+			var legal = LocalTargeting.ComputeMoveTargets(u, cfg);
+			Board.Instance.HighlightSlots(legal, true);
+			var skillTargets = LocalTargeting.ComputeAttackTargets(u, cfg, currentSelectedSkillIndex);
+			Board.Instance.HighlightSkillSlots(skillTargets, true);
+		}
+
 		private bool TryIssueMoveToSlot(Transform slot)
 		{
 			if (selectedUnit == null || slot == null) return false;
@@ -399,15 +445,10 @@ namespace ManaGambit
 				if (IntentManager.Instance != null && !string.IsNullOrEmpty(selectedUnit.UnitID))
 				{
 					_ = IntentManager.Instance.SendMoveIntent(selectedUnit.UnitID, from, to);
-					// Keep selection and refresh highlights after move intent
-					if (NetworkManager.Instance != null && NetworkManager.Instance.UnitConfigAsset != null)
-					{
-						var legal = LocalTargeting.ComputeMoveTargets(selectedUnit, NetworkManager.Instance.UnitConfigAsset);
-						Board.Instance.HideAllHighlights();
-						Board.Instance.HighlightSlots(legal, true);
-						var skillTargets = LocalTargeting.ComputeAttackTargets(selectedUnit, NetworkManager.Instance.UnitConfigAsset, DefaultSkillIndex);
-						Board.Instance.HighlightSkillSlots(skillTargets, true);
-					}
+					// Clear highlights immediately when the move starts; redraw on completion via Unit events
+					Board.Instance.ClearMoveHighlights();
+					Board.Instance.ClearSkillHighlights();
+					// Highlights are cleared on move start and restored on completion via unit event hooks.
 					return true;
 				}
 				else
@@ -485,18 +526,27 @@ namespace ManaGambit
 				if (debugInput) Debug.Log($"[ClickInput] Send UseSkill unit={targetingUnit.UnitID} skillIndex={pendingSkillIndex} target=({toCoord.x},{toCoord.y})");
 				var target = new SkillTarget { cell = new Pos { x = toCoord.x, y = toCoord.y } };
 				_ = IntentManager.Instance.SendUseSkillIntent(targetingUnit.UnitID, pendingSkillIndex, target);
-				// Keep unit selected; exit explicit targeting state but remember selected skill index
-				isTargetingSkill = false;
-				pendingSkillIndex = -1;
+				// Clear highlights at the start of skill usage
+				Board.Instance.ClearMoveHighlights();
 				Board.Instance.ClearSkillHighlights();
-				// Restore default overlays after cast
-				if (selectedUnit != null && NetworkManager.Instance != null && NetworkManager.Instance.UnitConfigAsset != null)
+				// Keep unit selected; exit explicit targeting state and clear selected skill after use
+				isTargetingSkill = false;
+				pendingSkillIndex = NoSkillIndex;
+				currentSelectedSkillIndex = NoSkillIndex;
+				if (SkillBar != null) SkillBar.SetSelectedSkillIndex(currentSelectedSkillIndex);
+				// Subscribe to restore overlays after skill completes
+				void RestoreAfterSkill(Unit u)
 				{
-					var legal = LocalTargeting.ComputeMoveTargets(selectedUnit, NetworkManager.Instance.UnitConfigAsset);
-					Board.Instance.HighlightSlots(legal, true);
-					var skillTargets = LocalTargeting.ComputeAttackTargets(selectedUnit, NetworkManager.Instance.UnitConfigAsset, currentSelectedSkillIndex);
-					Board.Instance.HighlightSkillSlots(skillTargets, true);
+					u.OnSkillCompleted -= RestoreAfterSkill;
+					if (selectedUnit != null && NetworkManager.Instance != null && NetworkManager.Instance.UnitConfigAsset != null)
+					{
+						var legal = LocalTargeting.ComputeMoveTargets(selectedUnit, NetworkManager.Instance.UnitConfigAsset);
+						Board.Instance.HighlightSlots(legal, true);
+						var skillTargets = LocalTargeting.ComputeAttackTargets(selectedUnit, NetworkManager.Instance.UnitConfigAsset, currentSelectedSkillIndex);
+						Board.Instance.HighlightSkillSlots(skillTargets, true);
+					}
 				}
+				targetingUnit.OnSkillCompleted += RestoreAfterSkill;
 				return true;
 			}
 			return false;
@@ -580,17 +630,16 @@ namespace ManaGambit
 			return !(float.IsNaN(v.x) || float.IsNaN(v.y) || float.IsInfinity(v.x) || float.IsInfinity(v.y));
 		}
 
-		private static bool IsPointerOverUI()
+	private static bool IsPointerOverUI()
+	{
+		if (EventSystem.current == null) return false;
+		if (EnhancedTouchSupport.enabled && UnityEngine.InputSystem.EnhancedTouch.Touch.activeTouches.Count > 0)
 		{
-			if (EventSystem.current == null) return false;
-			if (EnhancedTouchSupport.enabled && UnityEngine.InputSystem.EnhancedTouch.Touch.activeTouches.Count > 0)
-			{
-				var fingerId = UnityEngine.InputSystem.EnhancedTouch.Touch.activeTouches[0].finger.index;
-				return EventSystem.current.IsPointerOverGameObject(fingerId);
-			}
-			return EventSystem.current.IsPointerOverGameObject();
+			var touch = UnityEngine.InputSystem.EnhancedTouch.Touch.activeTouches[0];
+			return EventSystem.current.IsPointerOverGameObject(touch.touchId);
 		}
-
+		return EventSystem.current.IsPointerOverGameObject();
+	}
 		private static void SetUnitSelectionHighlight(Unit unit, bool highlighted)
 		{
 			if (unit == null) return;
@@ -644,6 +693,46 @@ namespace ManaGambit
 			return false;
 		}
 
-
+		private bool TryExecuteDefaultSkillOnSlot(Transform slotTransform, Unit selectedUnit)
+		{
+			if (slotTransform == null || selectedUnit == null) return false;
+			if (!Board.Instance.TryGetCoord(slotTransform, out var toCoord)) return false;
+			
+			// First check if this is an empty legal move target - if so, prefer move over default skill
+			if (IsSlotEmpty(toCoord))
+			{
+				var moveCfg = NetworkManager.Instance?.UnitConfigAsset;
+				if (moveCfg != null)
+				{
+					var legalMoveTargets = LocalTargeting.ComputeMoveTargets(selectedUnit, moveCfg);
+					if (legalMoveTargets.Contains(toCoord))
+					{
+						if (debugInput) Debug.Log($"[ClickInput] Empty legal move target detected at {toCoord}, sending Move intent instead of default skill");
+						if (IntentManager.Instance != null && !string.IsNullOrEmpty(selectedUnit.UnitID))
+						{
+							var fromCoord = selectedUnit.CurrentPosition;
+							var from = new Pos { x = fromCoord.x, y = fromCoord.y };
+							var to = new Pos { x = toCoord.x, y = toCoord.y };
+							_ = IntentManager.Instance.SendMoveIntent(selectedUnit.UnitID, from, to);
+							// Clear highlights immediately when the move starts
+							Board.Instance.ClearMoveHighlights();
+							Board.Instance.ClearSkillHighlights();
+							return true;
+						}
+					}
+				}
+			}
+			
+			// Fallback to default skill logic if not a legal move target
+			var cfg = NetworkManager.Instance != null ? NetworkManager.Instance.UnitConfigAsset : null;
+			if (cfg == null) return false;
+			var defaultSkillTargets = LocalTargeting.ComputeSkillTargets(selectedUnit, cfg, DefaultSkillIndex);
+			if (!defaultSkillTargets.Contains(toCoord)) return false;
+			if (IntentManager.Instance == null || string.IsNullOrEmpty(selectedUnit.UnitID)) return false;
+			if (debugInput) Debug.Log($"[ClickInput] Default skill ({DefaultSkillIndex}) at slot {toCoord}");
+			var target = new SkillTarget { cell = new Pos { x = toCoord.x, y = toCoord.y } };
+			_ = IntentManager.Instance.SendUseSkillIntent(selectedUnit.UnitID, DefaultSkillIndex, target);
+			return true;
+		}
 	}
 }

@@ -14,6 +14,8 @@ namespace ManaGambit
         private const int BaseLayerIndex = 0; // Avoid magic number for base layer
         private const float ImmediateTransitionDuration = 0f; // Instant blend to avoid visible slide before pose
 
+        private int _lastSampleFrame = -1;
+
         private void Awake()
         {
             if (animator == null)
@@ -65,10 +67,17 @@ namespace ManaGambit
 
             if (hasByName || hasByFullPath)
             {
+                // Choose the hash that actually exists - prefer name hash, fallback to full path hash
+                int hashToUse = hasByName ? stateHash : fullPathHash;
+                
                 // Ensure immediate visual switch to prevent movement starting while still in Idle pose
-                animator.CrossFadeInFixedTime(stateName, ImmediateTransitionDuration, BaseLayerIndex, 0f);
-                // Force-sample this frame so pose updates before any same-frame movement
-                animator.Update(0f);
+                animator.CrossFadeInFixedTime(hashToUse, ImmediateTransitionDuration, BaseLayerIndex, 0f);
+                // Force-sample this frame so pose updates before any same-frame movement, but only once per frame
+                if (_lastSampleFrame != Time.frameCount)
+                {
+                    animator.Update(0f);
+                    _lastSampleFrame = Time.frameCount;
+                }
                 return true;
             }
 

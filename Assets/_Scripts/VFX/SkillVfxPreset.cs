@@ -62,6 +62,25 @@ namespace ManaGambit
 		public string CustomTargetAnchorName => customTargetAnchorName;
 		public AudioClip AudioCast => audioCast;
 		public AudioClip AudioImpact => audioImpact;
+
+		#if UNITY_EDITOR
+		private void OnValidate()
+		{
+			const int MinAllowedMs = 0;
+			const float MinAllowedSpeed = 0f;
+
+			// Clamp to minimums
+			fixedWindupMs = Mathf.Max(MinAllowedMs, fixedWindupMs);
+			travelMs = Mathf.Max(MinAllowedMs, travelMs);
+			projectileSpeedUnitsPerSec = Mathf.Max(MinAllowedSpeed, projectileSpeedUnitsPerSec);
+
+			// Warn if projectile may not move
+			if (projectilePrefab != null && travelMs == MinAllowedMs && projectileSpeedUnitsPerSec == MinAllowedSpeed)
+			{
+				Debug.LogWarning($"[{nameof(SkillVfxPreset)}] Projectile may not move; both {nameof(travelMs)} and {nameof(projectileSpeedUnitsPerSec)} are 0 on '{name}'", this);
+			}
+		}
+		#endif
 	}
 }
 

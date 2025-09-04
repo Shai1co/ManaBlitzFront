@@ -250,8 +250,10 @@ namespace ManaGambit
 		public int serverTick;
 		public int startTick;
 		public BoardData board;
-		public Dictionary<string, float> playerMana;
-		// public Dictionary<string, float> playerMana; // not used now
+		/// <summary>
+		/// Mana per player keyed by playerId (not userId).
+		/// </summary>
+		public Dictionary<string, float> playerMana = new Dictionary<string, float>();
 		// NOTE: server currently sends 'countdown' as a string token instead of an object
 		// Using loose-typed field to accept both string and object tokens
 		public object countdown;

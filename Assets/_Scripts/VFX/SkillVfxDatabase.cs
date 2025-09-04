@@ -6,6 +6,7 @@ namespace ManaGambit
 	[CreateAssetMenu(fileName = "SkillVfxDatabase", menuName = "ManaGambit/VFX/Skill VFX Database", order = 11)]
 	public class SkillVfxDatabase : ScriptableObject
 	{
+		[Tooltip("List of Skill VFX presets. Ensure each preset is unique — no duplicate entries.")]
 		[SerializeField]
 		private List<SkillVfxPreset> presets = new List<SkillVfxPreset>();
 

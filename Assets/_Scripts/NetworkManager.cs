@@ -98,6 +98,53 @@ namespace ManaGambit
 			_reconnectCts = new CancellationTokenSource();
 		}
 
+		/// <summary>
+		/// Helper method to extract maxMana value from config constants using reflection.
+		/// Tries both property and field named "maxMana", validates it's a positive int,
+		/// and returns the default value when missing or invalid.
+		/// </summary>
+		/// <param name="constants">The constants object to search for maxMana</param>
+		/// <param name="defaultValue">Default value to return if maxMana is not found or invalid</param>
+		/// <returns>The resolved maxMana value or the default if not found/invalid</returns>
+		private static int GetMaxManaFromConstants(object constants, int defaultValue = 10)
+		{
+			if (constants == null) return defaultValue;
+
+			var constantsType = constants.GetType();
+			
+			// Try property first
+			var maxManaProp = constantsType.GetProperty("maxMana");
+			if (maxManaProp != null)
+			{
+				try
+				{
+					object value = maxManaProp.GetValue(constants, null);
+					if (value is int intValue && intValue > 0)
+					{
+						return intValue;
+					}
+				}
+				catch { /* ignore reflection errors */ }
+			}
+			
+			// Try field if property not found or failed
+			var maxManaField = constantsType.GetField("maxMana");
+			if (maxManaField != null)
+			{
+				try
+				{
+					object value = maxManaField.GetValue(constants);
+					if (value is int intValue && intValue > 0)
+					{
+						return intValue;
+					}
+				}
+				catch { /* ignore reflection errors */ }
+			}
+			
+			return defaultValue;
+		}
+
 		public async UniTask<bool> FetchConfig()
 		{
 			if (string.IsNullOrEmpty(AuthManager.Instance.Token))
@@ -141,17 +188,12 @@ namespace ManaGambit
 				// Apply max mana to UI if available in constants
 				try
 				{
-					var manaBar = ManaBarUI.Instance != null ? ManaBarUI.Instance : FindFirstObjectByType<ManaBarUI>();
+					var manaBar = ManaBarUI.Instance != null
+					               ? ManaBarUI.Instance
+					               : FindFirstObjectByType<ManaBarUI>();
 					if (manaBar != null && cfg != null && cfg.constants != null)
 					{
-						// Server constants use maxMana (optional); default to 10 if absent
-						int maxMana = 10;
-						var constantsJson = JObject.FromObject(cfg.constants);
-						if (constantsJson.TryGetValue("maxMana", out var maxManaToken))
-						{
-							int parsed = (int)maxManaToken;
-							if (parsed > 0) maxMana = parsed;
-						}
+						int maxMana = GetMaxManaFromConstants(cfg.constants);
 						manaBar.SetMaxPips(maxMana);
 					}
 				}
@@ -662,17 +704,21 @@ namespace ManaGambit
 							if (HudController.Instance != null) HudController.Instance.UpdateMana(pid, mana);
 						}
 						// Set max from constants if fetched earlier
-						if (!string.IsNullOrEmpty(RulesHash))
-						{
-							var manaBar = ManaBarUI.Instance != null ? ManaBarUI.Instance : FindFirstObjectByType<ManaBarUI>();
-							if (manaBar != null && lastConfigJson != null)
-							{
-								var cfg = JsonUtility.FromJson<CombinedConfig>(lastConfigJson);
-								int maxMana = cfg != null && cfg.constants != null ? (cfg.constants.manaUpdateIntervalTicks >= 0 ? (cfg.constants.manaUpdateIntervalTicks * 0 + 10) : 10) : 10;
-								manaBar.SetMaxPips(maxMana);
-							}
-						}
-						// Countdown should stop at game start
+    if (!string.IsNullOrEmpty(RulesHash))
+    {
+        var manaBar = ManaBarUI.Instance != null
+            ? ManaBarUI.Instance
+            : FindFirstObjectByType<ManaBarUI>();
+        if (manaBar != null && lastConfigJson != null)
+        {
+            var cfg = JsonUtility.FromJson<CombinedConfig>(lastConfigJson);
+            if (cfg != null && cfg.constants != null)
+            {
+                int maxMana = GetMaxManaFromConstants(cfg.constants);
+                manaBar.SetMaxPips(maxMana);
+            }
+        }
+    }						// Countdown should stop at game start
 						if (HudController.Instance != null) HudController.Instance.StopCountdown();
 					}
 					catch { /* ignore */ }
@@ -756,6 +802,7 @@ namespace ManaGambit
 							if (unit != null)
 							{
 								unit.PlayUseSkill(use).Forget();
+								if (VfxManager.Instance != null) VfxManager.Instance.OnUseSkill(use, envelope.serverTick);
 							}
 						}
 						break;
@@ -782,6 +829,7 @@ namespace ManaGambit
 									}
 								}
 							}
+							if (VfxManager.Instance != null) VfxManager.Instance.OnUseSkillResult(res, envelope.serverTick);
 							// Do not update player mana from per-unit pips here; rely on ManaUpdate only
 							if (!string.IsNullOrEmpty(envelope.intentId) && IntentManager.Instance != null) IntentManager.Instance.HandleIntentResponse(envelope.intentId);
 						}
@@ -807,6 +855,7 @@ namespace ManaGambit
 						if (unit != null)
 						{
 							unit.PlayUseSkill(use).Forget();
+							if (VfxManager.Instance != null) VfxManager.Instance.OnUseSkill(use, evt.serverTick);
 						}
 					}
 				}
@@ -819,20 +868,6 @@ namespace ManaGambit
 					var res = evt != null ? evt.data : null;
 					if (res != null)
 					{
-						if (res.currentPips >= 0 && !string.IsNullOrEmpty(res.attacker))
-						{
-							var atk = GameManager.Instance.GetUnitById(res.attacker);
-							if (atk != null)
-							{
-								bool isOwn = AuthManager.Instance != null && string.Equals(atk.OwnerId, AuthManager.Instance.UserId);
-								if (isOwn)
-								{
-									var manaBar = FindFirstObjectByType<ManaBarUI>();
-									if (manaBar != null) manaBar.SetMana(res.currentPips);
-									if (HudController.Instance != null) HudController.Instance.UpdateMana(AuthManager.Instance.UserId, res.currentPips);
-								}
-							}
-						}
 						// Show hit feedback
 						if (res.targets != null)
 						{
@@ -848,6 +883,7 @@ namespace ManaGambit
 								}
 							}
 						}
+						if (VfxManager.Instance != null) VfxManager.Instance.OnUseSkillResult(res, evt.serverTick);
 					}
 				}
 				catch { /* ignore */ }

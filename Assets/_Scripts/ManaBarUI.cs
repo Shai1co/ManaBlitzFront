@@ -48,7 +48,7 @@ namespace ManaGambit
 					manaSlider.minValue = 0;
 					manaSlider.maxValue = manaMaxPips;
 				}
-				manaSlider.value = clamped;
+				manaSlider.SetValueWithoutNotify(clamped);
 			}
 			currentPips = clamped;
 			UpdateText(clamped);
@@ -76,15 +76,36 @@ namespace ManaGambit
 		public void SetMaxPips(int max)
 		{
 			manaMaxPips = Mathf.Max(0, max);
+			int previousPips = currentPips;
+			int clampedPips = Mathf.Clamp(previousPips, 0, manaMaxPips);
 			if (manaSlider != null)
 			{
 				manaSlider.minValue = 0;
 				manaSlider.maxValue = manaMaxPips;
 				manaSlider.wholeNumbers = true;
+				// Keep UI in range; avoid triggering callbacks
 				manaSlider.SetValueWithoutNotify(Mathf.Clamp(manaSlider.value, 0, manaMaxPips));
 			}
-			currentPips = Mathf.Clamp(currentPips, 0, manaMaxPips);
+			currentPips = clampedPips;
 			UpdateText(currentPips);
+			if (currentPips != previousPips)
+			{
+				var handlers = OnManaChanged;
+				if (handlers != null)
+				{
+					foreach (var d in handlers.GetInvocationList())
+					{
+						try
+						{
+							((Action<int>)d)(currentPips);
+						}
+						catch (Exception ex)
+						{
+							Debug.LogError($"OnManaChanged handler threw: {ex}");
+						}
+					}
+				}
+			}
 		}
 
 		private void UpdateText(int current)
