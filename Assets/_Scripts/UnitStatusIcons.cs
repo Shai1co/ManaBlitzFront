@@ -13,11 +13,16 @@ namespace ManaGambit
 			{
 				var cam = Camera.main;
 				if (cam == null) return;
-				// Face camera along Y (0 or 180) and lock Z; do not lock X
-				float y = cam.transform.position.z >= transform.position.z ? 0f : 180f;
-				var e = transform.rotation.eulerAngles;
-				var rot = Quaternion.Euler(e.x, y, 0f);
-				transform.rotation = rot;
+				
+				// Get world positions
+				Vector3 worldPos = transform.position;
+				Vector3 cameraPos = cam.transform.position;
+				
+				// Calculate full direction from billboard to camera (including Y component for full billboarding)
+				Vector3 directionToCamera = (cameraPos - worldPos).normalized;
+				
+				// Make the transform look at the camera position
+				transform.LookAt(cameraPos);
 			}
 		}
 
@@ -38,6 +43,10 @@ namespace ManaGambit
 		private Slider greenHpSlider;
 		[SerializeField, Tooltip("HP slider for enemy units (red)")]
 		private Slider redHpSlider;
+		[SerializeField, Tooltip("Diamond indicator for player-owned units (green)")]
+		private GameObject greenDiamond;
+		[SerializeField, Tooltip("Diamond indicator for enemy units (red)")]
+		private GameObject redDiamond;
 
 		private readonly Dictionary<string, GameObject> activeByName = new Dictionary<string, GameObject>();
 		private readonly Dictionary<string, Sprite> nameToSprite = new Dictionary<string, Sprite>();
@@ -63,6 +72,17 @@ namespace ManaGambit
 				}
 				if (container == null) container = transform;
 			}
+			
+			// Add billboard behavior to the container instead of individual icons
+			if (container != null)
+			{
+				var billboard = container.GetComponent<BillboardLimited>();
+				if (billboard == null) 
+				{
+					billboard = container.gameObject.AddComponent<BillboardLimited>();
+				}
+			}
+			
 			AutoWireHpSlidersIfNeeded();
 			if (sprites != null)
 			{
@@ -108,6 +128,31 @@ namespace ManaGambit
 			// Show only after damage and while hp > 0
 			bool shouldShow = (current < max) && (current > 0);
 			active.gameObject.SetActive(shouldShow);
+			
+			// Hide the visible diamond when HP bar is shown
+			if (shouldShow)
+			{
+				HideAllDiamonds();
+			}
+			else
+			{
+				// Show appropriate diamond when HP bar is not visible
+				SetDiamondVisibility(isOwn);
+			}
+		}
+
+		public void SetDiamondVisibility(bool isPlayerUnit)
+		{
+			// Show green diamond for player units, red for enemy units
+			// Only one should be visible at a time
+			if (greenDiamond != null) greenDiamond.SetActive(isPlayerUnit);
+			if (redDiamond != null) redDiamond.SetActive(!isPlayerUnit);
+		}
+
+		private void HideAllDiamonds()
+		{
+			if (greenDiamond != null) greenDiamond.SetActive(false);
+			if (redDiamond != null) redDiamond.SetActive(false);
 		}
 
 		public void Apply(StatusChange[] changes)
@@ -150,7 +195,12 @@ namespace ManaGambit
 
 		private void Show(string statusName)
 		{
-			if (activeByName.ContainsKey(statusName)) return;
+			if (activeByName.TryGetValue(statusName, out var existing) && existing != null)
+			{
+				ConfigureAsText(existing, statusName);
+				existing.SetActive(true);
+				return;
+			}
 			if (iconTemplate == null || container == null)
 			{
 				Debug.LogWarning($"[UnitStatusIcons] Missing iconTemplate or container for {name} (statusName={statusName})");
@@ -158,92 +208,9 @@ namespace ManaGambit
 			}
 			var go = Instantiate(iconTemplate, container);
 			go.name = $"StatusIcon_{statusName}";
+			// For now, always show as text
+			ConfigureAsText(go, statusName);
 			go.SetActive(true);
-			// Billboard behavior
-			var billboard = go.GetComponent<BillboardLimited>();
-			if (billboard == null) billboard = go.AddComponent<BillboardLimited>();
-			// Choose display mode
-			if (textOnly)
-			{
-				// Disable any sprite components
-				var imgAll = go.GetComponentsInChildren<Image>(true);
-				for (int ii = 0; ii < imgAll.Length; ii++) { if (imgAll[ii] != null) imgAll[ii].enabled = false; }
-				var srAll = go.GetComponentsInChildren<SpriteRenderer>(true);
-				for (int ii = 0; ii < srAll.Length; ii++) { if (srAll[ii] != null) srAll[ii].enabled = false; }
-				// Use TMP text and set to sprite name if available; fall back to status key
-				string label = statusName;
-				if (nameToSprite.TryGetValue(statusName, out var mappedSprite) && mappedSprite != null)
-				{
-					label = string.IsNullOrEmpty(mappedSprite.name) ? statusName : mappedSprite.name;
-				}
-				var tmpUgui = go.GetComponentInChildren<TextMeshProUGUI>(true);
-				if (tmpUgui == null && container != null) tmpUgui = container.GetComponentInChildren<TextMeshProUGUI>(true);
-				if (tmpUgui != null)
-				{
-					tmpUgui.text = label;
-					tmpUgui.enabled = true;
-					tmpUgui.gameObject.SetActive(true);
-				}
-				else
-				{
-					var tmp = go.GetComponentInChildren<TextMeshPro>(true);
-					if (tmp == null && container != null) tmp = container.GetComponentInChildren<TextMeshPro>(true);
-					if (tmp != null)
-					{
-						tmp.text = label;
-						tmp.enabled = true;
-						tmp.gameObject.SetActive(true);
-					}
-				}
-			}
-			else
-			{
-				// Icon-first mode (previous behavior)
-				bool usedSprite = false;
-				var img = go.GetComponentInChildren<Image>(true);
-				if (img != null && nameToSprite.TryGetValue(statusName, out var spriteImg))
-				{
-					img.sprite = spriteImg;
-					img.enabled = true;
-					usedSprite = true;
-				}
-				if (!usedSprite)
-				{
-					var sr = go.GetComponentInChildren<SpriteRenderer>(true);
-					if (sr != null && nameToSprite.TryGetValue(statusName, out var spriteSr))
-					{
-						sr.sprite = spriteSr;
-						sr.enabled = true;
-						usedSprite = true;
-					}
-				}
-				if (!usedSprite)
-				{
-					var tmpUgui = go.GetComponentInChildren<TextMeshProUGUI>(true);
-					if (tmpUgui == null && container != null) tmpUgui = container.GetComponentInChildren<TextMeshProUGUI>(true);
-					if (tmpUgui != null)
-					{
-						tmpUgui.text = statusName;
-						tmpUgui.enabled = true;
-						tmpUgui.gameObject.SetActive(true);
-					}
-					else
-					{
-						var tmp = go.GetComponentInChildren<TextMeshPro>(true);
-						if (tmp == null && container != null) tmp = container.GetComponentInChildren<TextMeshPro>(true);
-						if (tmp != null)
-						{
-							tmp.text = statusName;
-							tmp.enabled = true;
-							tmp.gameObject.SetActive(true);
-						}
-						else
-						{
-							Debug.LogWarning($"[UnitStatusIcons] No sprite or TextMeshPro found for {statusName} on template {iconTemplate.name}");
-						}
-					}
-				}
-			}
 			activeByName[statusName] = go;
 		}
 
@@ -252,13 +219,49 @@ namespace ManaGambit
 			if (!activeByName.TryGetValue(statusName, out var go)) return;
 			if (go != null)
 			{
-				// Ensure text is disabled when hidden (for text-only mode)
+				// Disable text and sprite visuals, then deactivate for reuse
 				var tmpUgui = go.GetComponentInChildren<TextMeshProUGUI>(true);
 				if (tmpUgui != null) tmpUgui.enabled = false;
 				var tmp = go.GetComponentInChildren<TextMeshPro>(true);
 				if (tmp != null) tmp.enabled = false;
-				Destroy(go);
-			}			activeByName.Remove(statusName);
+				var imgAll = go.GetComponentsInChildren<Image>(true);
+				for (int ii = 0; ii < imgAll.Length; ii++) { if (imgAll[ii] != null) imgAll[ii].enabled = false; }
+				var srAll = go.GetComponentsInChildren<SpriteRenderer>(true);
+				for (int ii = 0; ii < srAll.Length; ii++) { if (srAll[ii] != null) srAll[ii].enabled = false; }
+				go.SetActive(false);
+			}
+		}
+
+		private void ConfigureAsText(GameObject go, string label)
+		{
+			// Disable sprite visuals for now
+			var imgAll = go.GetComponentsInChildren<Image>(true);
+			for (int ii = 0; ii < imgAll.Length; ii++) { if (imgAll[ii] != null) imgAll[ii].enabled = false; }
+			var srAll = go.GetComponentsInChildren<SpriteRenderer>(true);
+			for (int ii = 0; ii < srAll.Length; ii++) { if (srAll[ii] != null) srAll[ii].enabled = false; }
+
+			// Prefer TMP UGUI; fallback to 3D TMP
+			var tmpUgui = go.GetComponentInChildren<TextMeshProUGUI>(true);
+			if (tmpUgui == null && container != null) tmpUgui = container.GetComponentInChildren<TextMeshProUGUI>(true);
+			if (tmpUgui != null)
+			{
+				tmpUgui.text = label;
+				tmpUgui.enabled = true;
+				tmpUgui.gameObject.SetActive(true);
+				return;
+			}
+			var tmp = go.GetComponentInChildren<TextMeshPro>(true);
+			if (tmp == null && container != null) tmp = container.GetComponentInChildren<TextMeshPro>(true);
+			if (tmp != null)
+			{
+				tmp.text = label;
+				tmp.enabled = true;
+				tmp.gameObject.SetActive(true);
+			}
+			else
+			{
+				Debug.LogWarning($"[UnitStatusIcons] No TextMeshPro found for label '{label}' on template {iconTemplate?.name}");
+			}
 		}
 
 		private void RepositionIcons()
@@ -266,7 +269,7 @@ namespace ManaGambit
 			int idx = 0;
 			foreach (var kv in activeByName)
 			{
-				if (kv.Value == null) continue;
+				if (kv.Value == null || !kv.Value.activeSelf) continue;
 				var t = kv.Value.transform as RectTransform;
 				if (t != null)
 				{

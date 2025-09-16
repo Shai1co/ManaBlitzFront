@@ -2,6 +2,7 @@ using TMPro;
 using UnityEngine;
 using UnityEngine.UI;
 using Cysharp.Threading.Tasks;
+using DarkTonic.MasterAudio;
 
 namespace ManaGambit
 {
@@ -21,6 +22,9 @@ namespace ManaGambit
 		private int defaultToastSeconds = 3;
 		[SerializeField, Tooltip("Transient toast message surface; separate from persistent status")] private TextMeshProUGUI toastText;
 		[SerializeField, Tooltip("CanvasGroup for toast and its decorations - controls visibility and interactivity")] private CanvasGroup toastCanvasGroup;
+		[SerializeField, Tooltip("Player names container - set active when joining match")] private GameObject playerNamesContainer;
+		[SerializeField, Tooltip("Text component for local player name")] private TextMeshProUGUI localPlayerNameText;
+		[SerializeField, Tooltip("Text component for opponent player name")] private TextMeshProUGUI opponentPlayerNameText;
 
 		private System.Threading.CancellationTokenSource toastCts;
 		private System.Threading.CancellationTokenSource countdownCts;
@@ -64,6 +68,7 @@ namespace ManaGambit
 			HideStatus();
 			HideGameOver();
 			HideToast();
+			HidePlayerNames();
 		}
 
 		public void ShowStatus(string message, string kind = "info")
@@ -88,6 +93,7 @@ namespace ManaGambit
 		{
 			if (countdownText != null)
 			{
+				countdownText.transform.parent.gameObject.SetActive(true);
 				countdownText.enabled = true;
 				countdownText.text = seconds.ToString();
 			}
@@ -103,7 +109,8 @@ namespace ManaGambit
 
 		public void HideCountdown()
 		{
-			if (countdownText != null) countdownText.enabled = false;
+			if (countdownText != null) countdownText.transform.parent.gameObject.SetActive(false);
+			//if (countdownText != null) countdownText.enabled = false;
 		}
 
 		public void StartCountdown(int seconds)
@@ -156,7 +163,7 @@ namespace ManaGambit
 			}
 			if (remaining > 0) StartCountdown(remaining); else StopCountdown();
 		}
-
+		[SerializeField, SoundGroup] private string countdownTickSoundName, countdownEndSoundName;
 		private async UniTask RunCountdownSeconds(int seconds, System.Threading.CancellationToken token)
 		{
 			try
@@ -165,17 +172,26 @@ namespace ManaGambit
 				while (remaining > 0)
 				{
 					await UniTask.Delay(OneSecondMs, ignoreTimeScale: true, cancellationToken: token);
-					
+
 					// Check cancellation immediately after delay to avoid stale UI updates
 					if (token.IsCancellationRequested)
 					{
 						break;
 					}
-					
+
 					remaining = Mathf.Max(0, remaining - 1);
 					UpdateCountdownTimer(remaining);
+					if (countdownTickSoundName != string.Empty && remaining > 0)
+					{
+						MasterAudio.PlaySoundAndForget(countdownTickSoundName);
+					}
 				}
+
 				HideCountdown();
+				if (countdownEndSoundName != string.Empty)
+				{
+					MasterAudio.PlaySoundAndForget(countdownEndSoundName);
+				}
 			}
 			catch (System.OperationCanceledException)
 			{
@@ -191,6 +207,9 @@ namespace ManaGambit
 		{
 			// Always show the root game over panel
 			if (gameOverPanel != null) gameOverPanel.SetActive(true);
+
+			// Hide player names when game is over
+			HidePlayerNames();
 
 			// Determine win/lose for the local player
 			bool hasWinner = !string.IsNullOrEmpty(winnerUserId);
@@ -235,7 +254,7 @@ namespace ManaGambit
 			{
 				Debug.Log($"[HUD][toast][{kind}] {message}");
 			}
-			
+
 			// Show toast canvas group
 			if (toastCanvasGroup != null)
 			{
@@ -243,7 +262,7 @@ namespace ManaGambit
 				toastCanvasGroup.interactable = true;
 				toastCanvasGroup.blocksRaycasts = true;
 			}
-			
+
 			// cancel any previous hide task
 			CleanupToastCts();
 			toastCts = new System.Threading.CancellationTokenSource();
@@ -257,7 +276,7 @@ namespace ManaGambit
 				HideToast();
 				return;
 			}
-			
+
 			try
 			{
 				await UniTask.Delay(seconds * OneSecondMs, ignoreTimeScale: true, cancellationToken: token);
@@ -277,9 +296,9 @@ namespace ManaGambit
 		{
 			// Cancel any pending hide tasks and release resources
 			CleanupToastCts();
-			
+
 			if (toastText != null) toastText.enabled = false;
-			
+
 			// Hide toast canvas group
 			if (toastCanvasGroup != null)
 			{
@@ -289,16 +308,55 @@ namespace ManaGambit
 			}
 		}
 
-        private void OnDestroy()
-        {
-            if (Instance == this) Instance = null;
-            CleanupToastCts();
-            CleanupCountdownCts();
-        }
+		private void OnDestroy()
+		{
+			if (Instance == this) Instance = null;
+			CleanupToastCts();
+			CleanupCountdownCts();
+		}
+
+		public void ShowPlayerNames()
+		{
+			if (playerNamesContainer != null) playerNamesContainer.SetActive(true);
+		}
+
+		public void HidePlayerNames()
+		{
+			if (playerNamesContainer != null) playerNamesContainer.SetActive(false);
+		}
+
+		public void SetLocalPlayerName(string playerName)
+		{
+			if (localPlayerNameText != null) 
+			{
+				localPlayerNameText.text = string.IsNullOrEmpty(playerName) ? "Player" : playerName;
+			}
+		}
+
+		public void SetOpponentPlayerName(string playerName)
+		{
+			if (opponentPlayerNameText != null) 
+			{
+				opponentPlayerNameText.text = string.IsNullOrEmpty(playerName) ? "Opponent" : playerName;
+			}
+		}
+
+		/// <summary>
+		/// Sets both player names and shows the UI. Call this when match starts.
+		/// </summary>
+		/// <param name="localPlayerName">Name of the local player</param>
+		/// <param name="opponentPlayerName">Name of the opponent player</param>
+		public void SetPlayerNames(string localPlayerName, string opponentPlayerName)
+		{
+			SetLocalPlayerName(localPlayerName);
+			SetOpponentPlayerName(opponentPlayerName);
+			ShowPlayerNames();
+		}
+
 		public void UpdateMana(string playerId, float mana)
 		{
 			// Placeholder hook; integrate with mana UI when available
-			Debug.Log($"[HUD] ManaUpdate player={playerId} mana={mana}");
+			//			Debug.Log($"[HUD] ManaUpdate player={playerId} mana={mana}");
 		}
 	}
 }

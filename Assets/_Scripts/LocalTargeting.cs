@@ -7,6 +7,7 @@ namespace ManaGambit
 {
 	public static class LocalTargeting
 	{
+		private const int DefaultSkillIndexForPreview = 0;
 		public static HashSet<Vector2Int> ComputeMoveTargets(Unit unit, UnitConfig config)
 		{
 			var set = new HashSet<Vector2Int>();
@@ -36,8 +37,9 @@ namespace ManaGambit
 			if (unit == null || config == null) return result;
 			var data = config.GetData(unit.PieceId);
 			if (data == null || data.actions == null || data.actions.Length == 0) return result;
-			if (skillIndex < 0 || skillIndex >= data.actions.Length) return result;
-			var action = data.actions[skillIndex];
+			int selectedIndex = skillIndex < 0 ? DefaultSkillIndexForPreview : skillIndex;
+			if (selectedIndex >= data.actions.Length) return result;
+			var action = data.actions[selectedIndex];
 			if (action == null) return result;
 
 			// Attack patterns

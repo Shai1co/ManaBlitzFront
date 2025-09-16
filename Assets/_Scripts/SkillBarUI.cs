@@ -24,9 +24,10 @@ namespace ManaGambit
 		[System.ThreadStatic]
 		private static System.Text.StringBuilder canonicalStringBuilder;
 
-		private Unit boundUnit;
-		private bool isSubscribedToManaEvents = false;
-		private ClickInput cachedClickInput;
+	private Unit boundUnit;
+	private bool isSubscribedToManaEvents = false;
+	private ClickInput cachedClickInput;
+	private int selectedSkillIndex = -1; // Track currently selected skill (-1 means none selected)
 
 		private void Awake()
 		{
@@ -91,20 +92,27 @@ namespace ManaGambit
 			Refresh();
 		}
 
-		public void SetSelectedSkillIndex(int index)
-		{
-			for (int i = 0; i < SkillSlotCount; i++)
-			{
-				var overlay = (slotSelectionOverlays != null && i < slotSelectionOverlays.Length) ? slotSelectionOverlays[i] : null;
-				if (overlay != null) overlay.enabled = (i == index);
-			}
-		}
+	public void SetSelectedSkillIndex(int index)
+	{
+		selectedSkillIndex = index;
+		UpdateSelectionOverlays();
+	}
 
-		public void Clear()
+	private void UpdateSelectionOverlays()
+	{
+		for (int i = 0; i < SkillSlotCount; i++)
 		{
-			boundUnit = null;
-			ResetSlots();
+			var overlay = (slotSelectionOverlays != null && i < slotSelectionOverlays.Length) ? slotSelectionOverlays[i] : null;
+			if (overlay != null) overlay.enabled = (i == selectedSkillIndex);
 		}
+	}
+
+	public void Clear()
+	{
+		boundUnit = null;
+		selectedSkillIndex = -1; // Clear selection when clearing unit
+		ResetSlots();
+	}
 
 		private void Refresh()
 		{
@@ -180,11 +188,14 @@ namespace ManaGambit
 					Debug.Log($"[SkillBarUI] Slot {i}: action='{actionName}' iconKey='{action.icon}' => sprite='{(sprite!=null?sprite.name:"<none>")}'");
 				}
 
-				int capturedIndex = i;
-				button.onClick.AddListener(() => OnSkillClicked(capturedIndex));
-				button.interactable = IsSkillUsableByPips(action);
-			}
+			int capturedIndex = i;
+			button.onClick.AddListener(() => OnSkillClicked(capturedIndex));
+			button.interactable = IsSkillUsableByPips(action);
 		}
+		
+		// Restore selection after refreshing
+		UpdateSelectionOverlays();
+	}
 
 		private bool IsSkillUsableByPips(UnitConfig.ActionInfo action)
 		{
@@ -226,8 +237,8 @@ namespace ManaGambit
 					button.onClick.RemoveAllListeners();
 					button.interactable = false;
 				}
-				var overlay = (slotSelectionOverlays != null && i < slotSelectionOverlays.Length) ? slotSelectionOverlays[i] : null;
-				if (overlay != null) overlay.enabled = false;
+			// Note: Selection overlays are managed separately via UpdateSelectionOverlays()
+			// to preserve selection state during refreshes
 			}
 		}
 
@@ -458,17 +469,22 @@ namespace ManaGambit
 			return (slotTexts != null && index >= 0 && index < slotTexts.Length) ? slotTexts[index] : null;
 		}
 
-		private void OnSkillClicked(int actionIndex)
+	private void OnSkillClicked(int actionIndex)
+	{
+		if (boundUnit == null) return;
+		
+		// Always set the selection when a skill is clicked
+		SetSelectedSkillIndex(actionIndex);
+		
+		if (cachedClickInput != null && cachedClickInput.BeginSkillTargeting(boundUnit, actionIndex)) return;
+		
+		// Fallback: send immediately if input targeting not available
+		if (IntentManager.Instance != null && !string.IsNullOrEmpty(boundUnit.UnitID))
 		{
-			if (boundUnit == null) return;
-			if (cachedClickInput != null && cachedClickInput.BeginSkillTargeting(boundUnit, actionIndex)) return;
-			// Fallback: send immediately if input targeting not available
-			if (IntentManager.Instance != null && !string.IsNullOrEmpty(boundUnit.UnitID))
-			{
-				var target = new SkillTarget();
-				_ = IntentManager.Instance.SendUseSkillIntent(boundUnit.UnitID, actionIndex, target);
-			}
+			var target = new SkillTarget();
+			_ = IntentManager.Instance.SendUseSkillIntent(boundUnit.UnitID, actionIndex, target);
 		}
+	}
 
 		private static string GetActionDisplayName(UnitConfig.ActionInfo action, int index)
 		{

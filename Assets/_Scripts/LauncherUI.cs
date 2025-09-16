@@ -22,6 +22,7 @@ namespace ManaGambit
         [SerializeField] private TMP_Dropdown modeDropdown;
         [SerializeField] private Button loginButton;
         [SerializeField] private Button registerButton;
+        [SerializeField] private GameObject loadingGameObject;
         
         [Header("Settings")]
         [SerializeField] private string defaultEmail = "test@example.com";
@@ -77,6 +78,9 @@ namespace ManaGambit
                 int savedModeIndex = PlayerPrefs.GetInt(MODE_DROPDOWN_PREF_KEY, 0);
                 modeDropdown.SetValueWithoutNotify(savedModeIndex);
             }
+            
+            // Initialize loading state (should be hidden initially)
+            SetLoadingState(false);
         }
         
         private void SetupEventListeners()
@@ -251,6 +255,7 @@ namespace ManaGambit
         {
             isProcessing = true;
             SetButtonsInteractable(false);
+            SetLoadingState(true);
             
             // Create a timeout for each operation (30 seconds per operation)
             const int OPERATION_TIMEOUT_SECONDS = 30;
@@ -409,6 +414,7 @@ namespace ManaGambit
             {
                 isProcessing = false;
                 SetButtonsInteractable(true);
+                SetLoadingState(false);
                 
                 // Only show launcher if the operation failed or an exception occurred
                 if (!succeeded)
@@ -425,6 +431,15 @@ namespace ManaGambit
             
             if (registerButton != null)
                 registerButton.interactable = interactable;
+        }
+        
+        private void SetLoadingState(bool isLoading)
+        {
+            if (loadingGameObject != null)
+            {
+                loadingGameObject.SetActive(isLoading);
+                Debug.Log($"{LogTag} Loading state set to: {isLoading}");
+            }
         }
         
         public void ShowLauncher()

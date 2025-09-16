@@ -104,6 +104,37 @@ namespace ManaGambit
 			BuildSlotsFromContainer();
 		}
 
+#if UNITY_EDITOR
+		[UnityEditor.InitializeOnLoadMethod]
+		private static void EditorAutoInit()
+		{
+			EditorEnsureInstance();
+		}
+
+		public static void EditorEnsureInstance()
+		{
+			if (Instance == null)
+			{
+				var found = UnityEngine.Object.FindFirstObjectByType<Board>(UnityEngine.FindObjectsInactive.Include);
+				if (found != null)
+				{
+					Instance = found;
+				}
+			}
+		}
+		/// <summary>
+		/// Ensure slot maps are built when used from editor tools (Awake may not have run).
+		/// </summary>
+		public void EditorEnsureBuilt()
+		{
+			// Rebuild if we have no cached slots
+			if (coordToSlot == null || coordToSlot.Count == 0)
+			{
+				BuildSlotsFromContainer();
+			}
+		}
+#endif
+		[Button]
 		private void BuildSlotsFromContainer()
 		{
 			coordToSlot.Clear();
@@ -234,6 +265,15 @@ namespace ManaGambit
 			int x = Mathf.FloorToInt(localPos.x / TileSize);
 			int y = Mathf.FloorToInt(localPos.z / TileSize);
 			return new Vector2Int(x, y);
+		}
+
+		public bool IsOccupied(Vector2Int coord)
+		{
+			if (coordToBoardSlot.TryGetValue(coord, out var boardSlot))
+			{
+				return boardSlot.IsOccupied;
+			}
+			return false;
 		}
 	}
 }

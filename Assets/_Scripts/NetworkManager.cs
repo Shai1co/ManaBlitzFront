@@ -99,6 +99,26 @@ namespace ManaGambit
 		}
 
 		/// <summary>
+		/// Logs a server message in the exact JS client format: [MessageType] [server] -> {JSON}
+		/// </summary>
+		/// <param name="messageType">The server message type</param>
+		/// <param name="data">The message data</param>
+		/// <param name="logTag">Optional log tag prefix</param>
+		private static void LogServerMessage(string messageType, object data, string logTag = "[NetworkManager]")
+		{
+			if (string.IsNullOrEmpty(messageType) || data == null) return;
+			try
+			{
+				string jsonData = JsonUtility.ToJson(data);
+				Debug.Log($"{logTag} [{messageType}] [server] -> {jsonData}");
+			}
+			catch (System.Exception ex)
+			{
+				Debug.LogWarning($"{logTag} Failed to serialize server message {messageType}: {ex.Message}");
+			}
+		}
+
+		/// <summary>
 		/// Helper method to extract maxMana value from config constants using reflection.
 		/// Tries both property and field named "maxMana", validates it's a positive int,
 		/// and returns the default value when missing or invalid.
@@ -456,24 +476,46 @@ namespace ManaGambit
 
 		private void SetupBoard(BoardData board)
 		{
+			SetupBoard(board, true);
+		}
+
+		private void SetupBoard(BoardData board, bool forceFullReset)
+		{
 			if (board == null)
 			{
 				Debug.LogWarning($"{LogTag} SetupBoard called with null board");
 				return;
 			}
-			Debug.Log($"{LogTag} SetupBoard width={board.width} height={board.height} units={(board.units != null ? board.units.Length : 0)}");
-			foreach (var unit in GameManager.Instance.GetAllUnits())
+			Debug.Log($"{LogTag} SetupBoard width={board.width} height={board.height} units={(board.units != null ? board.units.Length : 0)} forceReset={forceFullReset}");
+			
+			// Only do full reset for initial setup or when explicitly requested
+			if (forceFullReset)
 			{
-				Destroy(unit.gameObject);
+				foreach (var unit in GameManager.Instance.GetAllUnits())
+				{
+					// For board setup, we can destroy immediately since this is cleanup/reset
+					Destroy(unit.gameObject);
+				}
+				GameManager.Instance.ClearUnits();
 			}
-			GameManager.Instance.ClearUnits();
 
 			if (board.units == null || board.units.Length == 0)
 			{
-				Debug.LogWarning($"{LogTag} Board has no units in snapshot");
+				if (forceFullReset)
+				{
+					Debug.LogWarning($"{LogTag} Board has no units in snapshot");
+				}
 				return;
 			}
 
+			// If not forcing reset, try to update existing units smoothly
+			if (!forceFullReset)
+			{
+				UpdateBoardIncremental(board);
+				return;
+			}
+
+			// Full reset: create all units from scratch
 			for (int i = 0; i < board.units.Length; i++)
 			{
 				var unitData = board.units[i];
@@ -514,6 +556,169 @@ namespace ManaGambit
 				GameManager.Instance.RegisterUnit(unit, unitData.unitId);
 				// Mark occupied
 				Board.Instance.SetOccupied(cell, unit);
+			}
+		}
+
+		private void UpdateBoardIncremental(BoardData board)
+		{
+			if (board == null || board.units == null) return;
+			
+			Debug.Log($"{LogTag} UpdateBoardIncremental - updating {board.units.Length} units with animations");
+			
+			// Update existing units and create new ones as needed
+			for (int i = 0; i < board.units.Length; i++)
+			{
+				var unitData = board.units[i];
+				var existingUnit = GameManager.Instance.GetUnitById(unitData.unitId);
+				
+				if (existingUnit != null)
+				{
+					// Unit exists - update its position smoothly if it moved
+					var currentPos = existingUnit.CurrentPosition;
+					var newPos = new Vector2Int(unitData.pos.x, unitData.pos.y);
+					
+					if (currentPos != newPos)
+					{
+						// Clear old occupancy
+						Board.Instance.ClearOccupied(currentPos, existingUnit);
+						// Move with animation
+						existingUnit.MoveTo(newPos).Forget();
+						// Mark new occupancy
+						Board.Instance.SetOccupied(newPos, existingUnit);
+					}
+					
+					// Update other properties
+					existingUnit.ApplyHpUpdate(unitData.hp);
+				}
+				else
+				{
+					// Unit doesn't exist - create it (this handles new units appearing)
+					var prefab = unitConfig != null ? unitConfig.GetPrefab(unitData.pieceId) : null;
+					if (prefab == null)
+					{
+						Debug.LogWarning($"{LogTag} No prefab mapped for pieceId='{unitData.pieceId}' (unitId='{unitData.unitId}'). Assign in UnitConfig.");
+						continue;
+					}
+
+					var cell = new Vector2Int(unitData.pos.x, unitData.pos.y);
+					Transform slot;
+					GameObject instance;
+					if (Board.Instance.TryGetSlot(cell, out slot) && slot != null)
+					{
+						var spawnPos = slot.position;
+						instance = Instantiate(prefab, spawnPos, Quaternion.identity);
+					}
+					else
+					{
+						var spawnPos = Board.Instance.GetWorldPosition(cell);
+						instance = Instantiate(prefab, spawnPos, Quaternion.identity);
+						Debug.LogWarning($"{LogTag} Slot not found for {cell}. Using grid fallback.");
+					}
+					var unit = instance.GetComponent<Unit>();
+					unit.SetUnitId(unitData.unitId);
+					unit.SetPieceId(unitData.pieceId);
+					unit.SetOwnerId(unitData.ownerId);
+					unit.SetInitialData(unitData, false);
+
+					// Apply rotation offsets
+					var isOwnUnit = string.Equals(unitData.ownerId, AuthManager.Instance.UserId);
+					var local = instance.transform.localEulerAngles;
+					local.x = isOwnUnit ? spawnRotationOffsetXDeg : -spawnRotationOffsetXDeg;
+					local.y = isOwnUnit ? ownUnitYawDeg : enemyUnitYawDeg;
+					instance.transform.localEulerAngles = local;
+
+					GameManager.Instance.RegisterUnit(unit, unitData.unitId);
+					// Mark occupied
+					Board.Instance.SetOccupied(cell, unit);
+				}
+			}
+			
+			// Handle units that no longer exist in the server state (remove them)
+			var allUnits = GameManager.Instance.GetAllUnits();
+			var serverUnitIds = new System.Collections.Generic.HashSet<string>();
+			for (int i = 0; i < board.units.Length; i++)
+			{
+				serverUnitIds.Add(board.units[i].unitId);
+			}
+			
+			for (int i = allUnits.Count - 1; i >= 0; i--)
+			{
+				var unit = allUnits[i];
+				if (!serverUnitIds.Contains(unit.UnitID))
+				{
+					// Unit no longer exists on server - remove it
+					Board.Instance.ClearOccupied(unit.CurrentPosition, unit);
+					GameManager.Instance.UnregisterUnit(unit.UnitID);
+					unit.Die(); // Use death animation instead of immediate destruction
+				}
+			}
+		}
+
+		/// <summary>
+		/// Extracts and sets player names for the HUD from available data sources.
+		/// Uses server playerNames if available, otherwise derives from AuthManager and board units.
+		/// </summary>
+		/// <param name="serverPlayerNames">Player names from server (optional)</param>
+		/// <param name="board">Board data to extract opponent from (optional)</param>
+		private void UpdatePlayerNamesUI(Dictionary<string, string> serverPlayerNames = null, BoardData board = null)
+		{
+			if (HudController.Instance == null) return;
+
+			try
+			{
+				string localPlayerName = "Player";
+				string opponentPlayerName = "Opponent";
+
+				// Get local player name from AuthManager
+				if (AuthManager.Instance != null && !string.IsNullOrEmpty(AuthManager.Instance.UserId))
+				{
+					// Try to get from server data first
+					if (serverPlayerNames != null && serverPlayerNames.TryGetValue(AuthManager.Instance.UserId, out var serverLocalName))
+					{
+						localPlayerName = serverLocalName;
+					}
+					else
+					{
+						// Fallback to AuthManager data (note: AuthManager doesn't currently store username, only UserId)
+						// For now, use a placeholder until server provides names
+						localPlayerName = "You";
+					}
+				}
+
+				// Get opponent name
+				if (board != null && board.units != null)
+				{
+					string localUserId = AuthManager.Instance?.UserId;
+					if (!string.IsNullOrEmpty(localUserId))
+					{
+						// Find the first unit with a different ownerId
+						foreach (var unit in board.units)
+						{
+							if (!string.IsNullOrEmpty(unit.ownerId) && !string.Equals(unit.ownerId, localUserId))
+							{
+								// Try to get opponent name from server data
+								if (serverPlayerNames != null && serverPlayerNames.TryGetValue(unit.ownerId, out var serverOpponentName))
+								{
+									opponentPlayerName = serverOpponentName;
+								}
+								else
+								{
+									// Use a more descriptive placeholder
+									opponentPlayerName = "Opponent";
+								}
+								break;
+							}
+						}
+					}
+				}
+
+				// SetPlayerNames will show the UI and update names - safe to call multiple times
+				HudController.Instance.SetPlayerNames(localPlayerName, opponentPlayerName);
+				Debug.Log($"{LogTag} Updated player names: Local='{localPlayerName}', Opponent='{opponentPlayerName}'");
+			}
+			catch (System.Exception ex)
+			{
+				Debug.LogWarning($"{LogTag} Failed to update player names UI: {ex.Message}");
 			}
 		}
 
@@ -654,18 +859,41 @@ namespace ManaGambit
 
 			isRoomOpen = true;
 			reconnectAttempts = 0;
+			
+			// Show player names UI immediately when joining match, even without complete data
+			// This ensures instant feedback when launcher closes
+			if (HudController.Instance != null)
+			{
+				// Show with basic info - will be updated when server provides complete data
+				string localPlayerName = "You";
+				if (AuthManager.Instance != null && !string.IsNullOrEmpty(AuthManager.Instance.UserId))
+				{
+					localPlayerName = "You";
+				}
+				HudController.Instance.SetPlayerNames(localPlayerName, "Opponent");
+				Debug.Log($"{LogTag} Showed player names UI immediately on room join");
+			}
 
 			room.OnMessage("*", (string type) =>
 			{
-				Debug.Log($"{LogTag} OnMessage '*' type='{type}'");
+				Debug.Log($"{LogTag} ServerMessage received - type='{type}'");
 			});
 
 			room.OnMessage<StateSnapshot>("StateSnapshot", snap =>
 			{
-				Debug.Log($"{LogTag} StateSnapshot received");
+				if (verboseNetworkLogging && snap != null)
+				{
+					LogServerMessage("StateSnapshot", snap, LogTag);
+				}
+				Debug.Log($"{LogTag} StateSnapshot received - serverTick={snap?.serverTick} startTick={snap?.startTick}");
 				if (snap != null)
 				{
-					if (snap.board != null) SetupBoard(snap.board);
+					if (snap.board != null) 
+					{
+						SetupBoard(snap.board, false); // Use incremental updates for snapshots
+						// Update player names UI if we have board data
+						UpdatePlayerNamesUI(snap.playerNames, snap.board);
+					}
 					// Initialize player mana from snapshot if present
 					try
 					{
@@ -690,9 +918,19 @@ namespace ManaGambit
 			});
 			room.OnMessage<GameEvent>("GameStart", evt =>
 			{
+				if (verboseNetworkLogging && evt?.data != null)
+				{
+					LogServerMessage("GameStart", evt.data, LogTag);
+				}
+				Debug.Log($"{LogTag} GameStart received - serverTick={evt?.serverTick}");
 				if (evt != null && evt.data != null)
 				{
-					if (evt.data.board != null) SetupBoard(evt.data.board);
+					if (evt.data.board != null) 
+					{
+						SetupBoard(evt.data.board, true); // Full reset for game start
+						// Update player names UI when game starts
+						UpdatePlayerNamesUI(evt.data.playerNames, evt.data.board);
+					}
 					// Initialize player mana from GameStart if provided
 					try
 					{
@@ -726,9 +964,19 @@ namespace ManaGambit
 			});
 			room.OnMessage<GameEvent>("GameAboutToStart", evt =>
 			{
+				if (verboseNetworkLogging && evt?.data != null)
+				{
+					LogServerMessage("GameAboutToStart", evt.data, LogTag);
+				}
+				Debug.Log($"{LogTag} GameAboutToStart received - serverTick={evt?.serverTick} startTick={evt?.data?.startTick}");
 				if (evt != null && evt.data != null)
 				{
-					if (evt.data.board != null) SetupBoard(evt.data.board);
+					if (evt.data.board != null) 
+					{
+						SetupBoard(evt.data.board, true); // Full reset for game about to start
+						// Update player names UI when match is about to start
+						UpdatePlayerNamesUI(evt.data.playerNames, evt.data.board);
+					}
 					// Start countdown if we have a future startTick
 					try
 					{
@@ -749,6 +997,7 @@ namespace ManaGambit
 					var mana = data != null ? data.mana : 0f;
 					if (verboseNetworkLogging)
 					{
+						LogServerMessage("ManaUpdate", data, LogTag);
 						Debug.Log($"{LogTag} ManaUpdate playerId={playerId} mana={mana}");
 					}
 					// Mirror JS leniency: if playerId is missing, assume it's for the local player
@@ -792,12 +1041,50 @@ namespace ManaGambit
 				{
 					case "Move":
 						var move = DeserializeEventData<MoveData>(envelope.data);
-						if (move != null) { HandleMove(move); if (!string.IsNullOrEmpty(envelope.intentId) && IntentManager.Instance != null) IntentManager.Instance.HandleIntentResponse(envelope.intentId); }
+						if (move != null) 
+						{ 
+							if (verboseNetworkLogging)
+							{
+								// Create complete move data for logging
+								var completeMove = new MoveData
+								{
+									unitId = move.unitId,
+									from = move.from,
+									to = move.to,
+									startTick = move.startTick,
+									endTick = move.endTick,
+									currentPips = move.currentPips,
+									intentId = envelope.intentId ?? string.Empty,
+									serverTick = envelope.serverTick
+								};
+								LogServerMessage("Move", completeMove, LogTag);
+							}
+							HandleMove(move); 
+							if (!string.IsNullOrEmpty(envelope.intentId) && IntentManager.Instance != null) IntentManager.Instance.HandleIntentResponse(envelope.intentId); 
+						}
 						break;
 					case "UseSkill":
 						var use = DeserializeEventData<UseSkillData>(envelope.data);
 						if (use != null && !string.IsNullOrEmpty(use.unitId))
 						{
+							if (verboseNetworkLogging)
+							{
+								// Create complete use skill data for logging
+								var completeUse = new UseSkillData
+								{
+									unitId = use.unitId,
+									skillId = use.skillId,
+									origin = use.origin,
+									target = use.target,
+									startTick = use.startTick,
+									endWindupTick = use.endWindupTick,
+									hitTick = use.hitTick,
+									currentPips = use.currentPips,
+									intentId = envelope.intentId ?? string.Empty,
+									serverTick = envelope.serverTick
+								};
+								LogServerMessage("UseSkill", completeUse, LogTag);
+							}
 							var unit = GameManager.Instance.GetUnitById(use.unitId);
 							if (unit != null)
 							{
@@ -810,6 +1097,13 @@ namespace ManaGambit
 						var res = DeserializeEventData<UseSkillResultData>(envelope.data);
 						if (res != null && res.targets != null)
 						{
+							if (verboseNetworkLogging)
+							{
+								// Add envelope data for complete logging to match JS client exactly
+								if (!string.IsNullOrEmpty(envelope.intentId)) res.intentId = envelope.intentId;
+								if (envelope.serverTick > 0) res.serverTick = envelope.serverTick;
+								LogServerMessage("UseSkillResult", res, LogTag);
+							}
 							for (int i = 0; i < res.targets.Length; i++)
 							{
 								var t = res.targets[i];
@@ -819,13 +1113,14 @@ namespace ManaGambit
 								{
 									if (t.damage > 0) victim.ShowDamageNumber(t.damage);
 									victim.PlayHitFlash();
+                                    // Play GetHit animation only from ServerEvent path (avoid duplicates)
+                                    try { var ua = victim.GetComponent<UnitAnimator>(); if (ua != null && Application.isPlaying) ua.PlayGetHit(); } catch { }
 									int nextHp = t.hp > 0 ? t.hp : Mathf.Max(0, victim.CurrentHp - Mathf.Max(0, t.damage));
 									victim.ApplyHpUpdate(nextHp);
 									if (t.killed || t.dead || nextHp <= 0)
 									{
-										Board.Instance.ClearOccupied(victim.CurrentPosition, victim);
-										UnityEngine.Object.Destroy(victim.gameObject);
-										GameManager.Instance.UnregisterUnit(t.unitId);
+										// Instead of immediate destruction, trigger death animation
+										victim.Die();
 									}
 								}
 							}
@@ -846,6 +1141,8 @@ namespace ManaGambit
 			room.OnMessage<GameEvent>("StateHeartbeat", _ => { /* ignore */ });
 			room.OnMessage<UseSkillEvent>("UseSkill", evt =>
 			{
+				// In play mode, prefer ServerEvent-only handling to avoid duplicates
+				if (Application.isPlaying) return;
 				try
 				{
 					var use = evt != null ? evt.data : null;
@@ -863,6 +1160,8 @@ namespace ManaGambit
 			});
 			room.OnMessage<UseSkillResultEvent>("UseSkillResult", evt =>
 			{
+				// In play mode, prefer ServerEvent-only handling to avoid duplicates
+				if (Application.isPlaying) return;
 				try
 				{
 					var res = evt != null ? evt.data : null;
@@ -890,6 +1189,10 @@ namespace ManaGambit
 			});
 			room.OnMessage<StatusUpdateEvent>("StatusUpdate", evt =>
 			{
+				if (verboseNetworkLogging && evt?.data != null)
+				{
+					LogServerMessage("StatusUpdate", evt.data, LogTag);
+				}
 				try
 				{
 					var unitId = evt != null && evt.data != null ? evt.data.unitId : null;
@@ -909,9 +1212,15 @@ namespace ManaGambit
 			});
 			room.OnMessage<GameOverEvent>("GameOver", evt =>
 			{
+				if (verboseNetworkLogging && evt?.data != null)
+				{
+					LogServerMessage("GameOver", evt.data, LogTag);
+				}
 				Debug.Log($"{LogTag} GameOver: reason={evt?.data?.reason} winner={evt?.data?.winnerUserId}");
 				if (HudController.Instance != null)
 				{
+					// Mirror JS client: hide countdown on game over
+					HudController.Instance.StopCountdown();
 					HudController.Instance.ShowGameOver(evt?.data?.winnerUserId);
 				}
 			});
@@ -919,11 +1228,24 @@ namespace ManaGambit
 			{
 				if (evt == null || evt.data == null)
 				{
+					if (verboseNetworkLogging)
+					{
+						LogServerMessage("Error", new { msg = "Error (no data)" }, LogTag);
+					}
 					Debug.LogWarning($"{LogTag} Error (no data)");
-					if (HudController.Instance != null) HudController.Instance.ShowToast("Error", "error", 3);
+					if (HudController.Instance != null)
+					{
+						// Mirror JS client: hide countdown on error
+						HudController.Instance.StopCountdown();
+						HudController.Instance.ShowToast("Error", "error", 3);
+					}
 				}
 				else
 				{
+					if (verboseNetworkLogging)
+					{
+						LogServerMessage("Error", evt.data, LogTag);
+					}
 					Debug.LogWarning($"{LogTag} Error: code={evt.data.code} msg={evt.data.msg} iid={evt.data.iid} retry={evt.data.retry}");
 					if (IntentManager.Instance != null)
 					{
@@ -932,15 +1254,35 @@ namespace ManaGambit
 					if (HudController.Instance != null)
 					{
 						var msg = string.IsNullOrEmpty(evt.data.msg) ? evt.data.code : evt.data.msg;
+						// Mirror JS client: hide countdown on error
+						HudController.Instance.StopCountdown();
 						HudController.Instance.ShowToast(msg, "error", 3);
 					}
 				}
 			});
 			room.OnMessage<ValidTargetsEvent>("ValidTargets", evt =>
 			{
+				if (verboseNetworkLogging && evt?.data != null)
+				{
+					LogServerMessage("ValidTargets", evt.data, LogTag);
+				}
 				int count = evt?.data?.targets != null ? evt.data.targets.Length : 0;
 				Debug.Log($"{LogTag} ValidTargets received for unit={evt?.data?.unitId} count={count}");
 				OnValidTargets?.Invoke(evt);
+			});
+			room.OnMessage<UnitDiedEvent>("UnitDied", evt =>
+			{
+				if (evt?.data?.unitId == null) return;
+				if (verboseNetworkLogging && evt?.data != null)
+				{
+					LogServerMessage("UnitDied", evt.data, LogTag);
+				}
+				Debug.Log($"{LogTag} UnitDied received for unitId={evt.data.unitId} killerId={evt.data.killerId}");
+				var unit = GameManager.Instance.GetUnitById(evt.data.unitId);
+				if (unit != null)
+				{
+					unit.Die(); // Trigger death animation and cleanup
+				}
 			});
 
 			// Handle disconnections/errors to support auto-reconnect

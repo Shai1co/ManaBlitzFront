@@ -30,9 +30,14 @@ namespace ManaGambit
 
         private CancellationTokenSource moveCts;
         private CancellationTokenSource _actionCts;
+        private CancellationTokenSource _deathCts;
         private const float DefaultMoveDurationSeconds = 1f;
+        private const float DeathAnimationDelaySeconds = 5f;
         private const float InstantMoveThresholdSeconds = 0.0001f;
         private const int DefaultBasicActionIndex = 0;
+        private const float MinPlanarDirectionSqrMagnitude = 0.0001f;
+        private const float HitFxInitialIntensity = 0.5f; // named constant instead of magic number
+        private const float HitFxFadeOutSeconds = 0.2f; // named constant for fade duration
 
         // Events to coordinate UI/highlights with gameplay actions
         public event Action<Unit> OnMoveStarted;
@@ -67,6 +72,7 @@ namespace ManaGambit
         private ManaGambit.UnitAnimator unitAnimator;
 
         private UnitState currentState = UnitState.Idle;
+        private bool isDead = false;
 
         // Damage numbers (DamageNumbersPro)
         [SerializeField] private DamageNumbersPro.DamageNumber damageNumberPrefab;
@@ -103,6 +109,7 @@ namespace ManaGambit
             }
 
             moveCts = new CancellationTokenSource();
+            var moveToken = moveCts.Token;
 
             Vector3 startPos = transform.position;
             Vector3 endPos = Board.Instance.GetSlotWorldPosition(target);
@@ -114,6 +121,15 @@ namespace ManaGambit
                 if (total <= InstantMoveThresholdSeconds || initialProgress >= 1f)
                 {
                     OnMoveStarted?.Invoke(this);
+                    // Face movement direction using local Y rotation only
+                    Vector3 instantPlanarDir = new Vector3(endPos.x - startPos.x, 0f, endPos.z - startPos.z);
+                    if (instantPlanarDir.sqrMagnitude > MinPlanarDirectionSqrMagnitude)
+                    {
+                        float instantYawDeg = Mathf.Atan2(instantPlanarDir.x, instantPlanarDir.z) * Mathf.Rad2Deg;
+                        var e = transform.localEulerAngles;
+                        e.y = instantYawDeg;
+                        transform.localEulerAngles = e;
+                    }
                     transform.position = endPos;
                     currentPosition = target;
                     SetState(UnitState.Idle);
@@ -125,9 +141,19 @@ namespace ManaGambit
                 SetState(UnitState.Moving);
                 OnMoveStarted?.Invoke(this);
 
+                // Face movement direction at movement start using local Y rotation only
+                Vector3 planarDir = new Vector3(endPos.x - startPos.x, 0f, endPos.z - startPos.z);
+                if (planarDir.sqrMagnitude > MinPlanarDirectionSqrMagnitude)
+                {
+                    float yawDeg = Mathf.Atan2(planarDir.x, planarDir.z) * Mathf.Rad2Deg;
+                    var e = transform.localEulerAngles;
+                    e.y = yawDeg;
+                    transform.localEulerAngles = e;
+                }
+
                 while (elapsed < total)
                 {
-                    if (moveCts.Token.IsCancellationRequested)
+                    if (moveToken.IsCancellationRequested)
                     {
                         // Ensure lifecycle notification on cancellation and return to Idle
                         SetState(UnitState.Idle);
@@ -139,7 +165,17 @@ namespace ManaGambit
                     float t = Mathf.Clamp01(elapsed / total);
                     transform.position = Vector3.Lerp(startPos, endPos, t);
 
-                    await UniTask.Yield(PlayerLoopTiming.Update, cancellationToken: moveCts.Token);
+                    try
+                    {
+                        await UniTask.Yield(PlayerLoopTiming.Update, cancellationToken: moveToken);
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        // Cancellation can occur between our IsCancellationRequested check and the await
+                        SetState(UnitState.Idle);
+                        OnMoveCompleted?.Invoke(this);
+                        return;
+                    }
                 }
 
                 transform.position = endPos;
@@ -163,7 +199,7 @@ namespace ManaGambit
             Attack(new Vector2Int(x, y));
         }
 
-        public async void Attack(Vector2Int target)
+        public void Attack(Vector2Int target)
         {
             OnSkillStarted?.Invoke(this);
             transform.LookAt(Board.Instance.GetSlotWorldPosition(target));
@@ -176,35 +212,53 @@ namespace ManaGambit
             }
             Debug.Log($"{name} attacking position {target} (windUpMs={windUpMs})");
 
-            if (windUpMs > 0)
+            // Mirror editor: do not play a dedicated WindUp animation. Begin the skill animation immediately.
+
+            // Ensure animator plays the basic attack animation
+            try { unitAnimator?.SetSkillIndex(DefaultBasicActionIndex); } catch { }
+            SetState(UnitState.Attacking);
+
+            // Schedule additional animation plays for multi-shot skills based on UnitConfig amount/interval
+            try
             {
-                SetState(UnitState.WindUp);
-                try
+                var cfg = NetworkManager.Instance != null ? NetworkManager.Instance.UnitConfigAsset : null;
+                var data = cfg != null ? cfg.GetData(pieceId) : null;
+                ManaGambit.UnitConfig.ActionInfo action = null;
+                if (data != null && data.actions != null && DefaultBasicActionIndex >= 0 && DefaultBasicActionIndex < data.actions.Length)
                 {
-                    // Create new action cancellation token source
-                    _actionCts?.Cancel();
-                    _actionCts?.Dispose();
-                    _actionCts = new CancellationTokenSource();
-                    
-                    // Create linked token for both destroy and manual cancellation
-                    var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(this.GetCancellationTokenOnDestroy(), _actionCts.Token);
-                    
-                    // Wait for wind-up duration before the hit occurs
-                    await UniTask.Delay(windUpMs, cancellationToken: linkedCts.Token);
+                    action = data.actions[DefaultBasicActionIndex];
                 }
-                catch (OperationCanceledException)
+                int amount = 1;
+                int intervalMs = 0;
+                if (action != null && action.attack != null)
                 {
-                    SetState(UnitState.Idle);
-                    OnSkillCompleted?.Invoke(this);
-                    return;
+                    amount = Mathf.Max(1, action.attack.amount);
+                    intervalMs = Mathf.Max(0, action.attack.interval);
+                }
+                if (amount > 1 && unitAnimator != null)
+                {
+                    // Use the same cancellation source as the action so repeats stop if the action is cancelled
+                    if (_actionCts == null)
+                    {
+                        _actionCts = new CancellationTokenSource();
+                    }
+                    var linked = CancellationTokenSource.CreateLinkedTokenSource(this.GetCancellationTokenOnDestroy(), _actionCts.Token);
+                    for (int s = 1; s < amount; s++)
+                    {
+                        int delay = s * intervalMs;
+                        UniTask.Void(async () =>
+                        {
+                            try { await UniTask.Delay(delay, cancellationToken: linked.Token); } catch { return; }
+                            try { unitAnimator.PlaySkillShotNow(DefaultBasicActionIndex); } catch { }
+                        });
+                    }
                 }
             }
-
-            SetState(UnitState.Attacking);
+            catch { }
 
             // TODO: trigger damage application here once server/client impact exists
 
-            SetState(UnitState.Idle);
+            // Do not force Idle here; UnitAnimator auto-returns to Idle after the clip.
             OnSkillCompleted?.Invoke(this);
         }
 
@@ -229,29 +283,10 @@ namespace ManaGambit
                 }
             }
 
-            if (windUpMs > 0)
-            {
-                SetState(UnitState.WindUp);
-                try
-                {
-                    // Create new action cancellation token source
-                    _actionCts?.Cancel();
-                    _actionCts?.Dispose();
-                    _actionCts = new CancellationTokenSource();
-                    
-                    // Create linked token for both destroy and manual cancellation
-                    var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(this.GetCancellationTokenOnDestroy(), _actionCts.Token);
-                    
-                    await UniTask.Delay(windUpMs, cancellationToken: linkedCts.Token);
-                }
-                catch (OperationCanceledException)
-                {
-                    SetState(UnitState.Idle);
-                    OnSkillCompleted?.Invoke(this);
-                    return;
-                }
-            }
+            // Mirror editor: do not enter a dedicated WindUp animation state
 
+            // Ensure animator plays the specific skill animation
+            try { unitAnimator?.SetSkillIndex(Mathf.Max(0, use.skillId)); } catch { }
             SetState(UnitState.Attacking);
 
             // If server provided a specific hit tick, optionally wait until then before returning to idle
@@ -284,7 +319,7 @@ namespace ManaGambit
                 }
             }
 
-            SetState(UnitState.Idle);
+            // Do not force Idle here; UnitAnimator auto-returns to Idle after the clip.
             OnSkillCompleted?.Invoke(this);
         }
 
@@ -304,8 +339,20 @@ namespace ManaGambit
                 _actionCts = null;
             }
             
+            if (_deathCts != null)
+            {
+                _deathCts.Cancel();
+                _deathCts.Dispose();
+                _deathCts = null;
+            }
+            
             Debug.Log($"{name} stopped");
-            SetState(UnitState.Idle);
+            
+            // Only set state to Idle if not dead
+            if (!isDead)
+            {
+                SetState(UnitState.Idle);
+            }
         }
 
         public void ApplyStatusChanges(StatusChange[] changes)
@@ -429,6 +476,7 @@ namespace ManaGambit
 
         public void ApplyHpUpdate(int newHp)
         {
+            int previousHp = currentHp;
             int clamped = Mathf.Clamp(newHp, 0, Mathf.Max(1, maxHp));
             currentHp = clamped;
             try
@@ -444,13 +492,39 @@ namespace ManaGambit
                 }
             }
             catch { /* UI optional */ }
+
+            // Trigger hit VFX when HP decreases
+            if (previousHp > currentHp)
+            {
+                try
+                {
+                    var hp = GetComponent<HighlightEffect>();
+                    if (hp == null) hp = GetComponentInChildren<HighlightEffect>(true);
+                    if (hp != null)
+                    {
+                        // Use Highlight Plus HitFX with specified initial intensity
+                        hp.HitFX(Color.white, HitFxFadeOutSeconds, HitFxInitialIntensity);
+                    }
+                }
+                catch { }
+            }
         }
 
         private void SetState(UnitState newState)
         {
-            if (currentState == newState) return;
+            // Don't accept any state changes after unit is dead
+            if (isDead)
+            {
+                Debug.Log($"{name} is dead, ignoring state change to {newState}");
+                return;
+            }
 
-            currentState = newState;
+            // Allow re-triggering Attacking state even if already Attacking so consecutive casts replay
+            if (!(newState == UnitState.Attacking && currentState == UnitState.Attacking))
+            {
+                if (currentState == newState) return;
+                currentState = newState;
+            }
 
             if (unitAnimator != null)
             {
@@ -459,6 +533,100 @@ namespace ManaGambit
 
             // Additional state-specific logic if needed
         }
+
+        public void Die()
+        {
+            if (isDead) 
+            {
+                Debug.Log($"{name} is already dead, ignoring Die() call");
+                return;
+            }
+
+            Debug.Log($"{name} is dying - playing death animation");
+            isDead = true;
+
+            // Stop all ongoing actions
+            Stop();
+
+            // Disable colliders so unit can't be selected
+            DisableColliders();
+
+            // Play death animation
+            if (unitAnimator != null)
+            {
+                unitAnimator.PlayDeath();
+            }
+
+            // Start delayed destruction
+            StartDelayedDestruction().Forget();
+        }
+
+        private void DisableColliders()
+        {
+            try
+            {
+                // Disable all colliders on this GameObject
+                var colliders = GetComponents<Collider>();
+                foreach (var collider in colliders)
+                {
+                    if (collider != null)
+                    {
+                        collider.enabled = false;
+                    }
+                }
+
+                // Also disable colliders on children
+                var childColliders = GetComponentsInChildren<Collider>();
+                foreach (var collider in childColliders)
+                {
+                    if (collider != null)
+                    {
+                        collider.enabled = false;
+                    }
+                }
+            }
+            catch (System.Exception e)
+            {
+                Debug.LogWarning($"{name} failed to disable colliders: {e.Message}");
+            }
+        }
+
+        private async UniTaskVoid StartDelayedDestruction()
+        {
+            try
+            {
+                _deathCts = new CancellationTokenSource();
+                var linkedToken = CancellationTokenSource.CreateLinkedTokenSource(
+                    this.GetCancellationTokenOnDestroy(), 
+                    _deathCts.Token).Token;
+
+                int delayMs = Mathf.RoundToInt(DeathAnimationDelaySeconds * 1000f);
+                await UniTask.Delay(delayMs, cancellationToken: linkedToken);
+
+                // Clean up from board and game manager before destroying
+                if (Board.Instance != null)
+                {
+                    Board.Instance.ClearOccupied(currentPosition, this);
+                }
+                if (GameManager.Instance != null)
+                {
+                    GameManager.Instance.UnregisterUnit(unitID);
+                }
+
+                Debug.Log($"{name} destruction timer completed - destroying GameObject");
+                Destroy(gameObject);
+            }
+            catch (OperationCanceledException)
+            {
+                Debug.Log($"{name} death animation cancelled");
+            }
+            catch (System.Exception e)
+            {
+                Debug.LogError($"{name} error during delayed destruction: {e.Message}");
+            }
+        }
+
+        public bool IsDead => isDead;
 
         private void OnDestroy()
         {
@@ -475,6 +643,13 @@ namespace ManaGambit
                 _actionCts.Cancel();
                 _actionCts.Dispose();
                 _actionCts = null;
+            }
+            
+            if (_deathCts != null)
+            {
+                _deathCts.Cancel();
+                _deathCts.Dispose();
+                _deathCts = null;
             }
         }
     }

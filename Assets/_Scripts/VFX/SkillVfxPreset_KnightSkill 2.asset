@@ -10,15 +10,15 @@ MonoBehaviour:
   m_Enabled: 1
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: 026706703bdff404e9df0bdbba2e8b8f, type: 3}
-  m_Name: SkillVfxPreset_KnightSkill0
+  m_Name: SkillVfxPreset_KnightSkill 2
   m_EditorClassIdentifier: Assembly-CSharp::ManaGambit.SkillVfxPreset
-  actionName: 
-  windupPrefab: {fileID: 0}
-  windupAttach: 0
+  actionName: Shield Wall
+  windupPrefab: {fileID: 186436225671142267, guid: aa3aa22ff86046849b713f3f31434315, type: 3}
+  windupAttach: 1
   windupDurationPolicy: 0
   fixedWindupMs: 500
   projectilePrefab: {fileID: 0}
-  projectileAttach: 2
+  projectileAttach: 0
   travelMs: 0
   projectileSpeedUnitsPerSec: 0
   impactPrefab: {fileID: 0}

@@ -39,6 +39,7 @@ namespace ManaGambit
 
         public Unit GetUnitById(string unitId)
         {
+            if (string.IsNullOrEmpty(unitId)) return null;
             units.TryGetValue(unitId, out var unit);
             return unit;
         }

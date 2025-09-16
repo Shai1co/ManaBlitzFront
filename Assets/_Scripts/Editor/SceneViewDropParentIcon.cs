@@ -248,6 +248,9 @@ namespace ManaGambit.EditorTools
 
 		private static void HandleComponentBasedTargets(SceneView sceneView)
 		{
+			// Respect global enabled setting for component-based targets too
+			if (!IsEnabled) return;
+
 			// Find all DropParentTarget components in the scene
 			var dropTargets = Object.FindObjectsOfType<DropParentTarget>();
 			if (dropTargets.Length == 0) return;
@@ -517,22 +520,55 @@ namespace ManaGambit.EditorTools
 
 		private void OnGUI()
 		{
-			enabledValue = EditorGUILayout.Toggle("Enable Icons", enabledValue);
-			
+			bool needsRepaint = false;
+
+			bool newEnabledValue = EditorGUILayout.Toggle("Enable Icons", enabledValue);
+			if (newEnabledValue != enabledValue)
+			{
+				enabledValue = newEnabledValue;
+				needsRepaint = true;
+			}
+
 			EditorGUILayout.Space();
 			EditorGUILayout.LabelField("Show icon when selected object has tag", EditorStyles.boldLabel);
-			tagValue = EditorGUILayout.TagField("Tag", string.IsNullOrEmpty(tagValue) ? "Untagged" : tagValue);
+			string newTagValue = EditorGUILayout.TagField("Tag", string.IsNullOrEmpty(tagValue) ? "Untagged" : tagValue);
+			if (newTagValue != tagValue)
+			{
+				tagValue = newTagValue;
+				needsRepaint = true;
+			}
 
 			EditorGUILayout.Space();
 			EditorGUILayout.LabelField("Icon Sprite", EditorStyles.boldLabel);
-			spriteValue = (Sprite)EditorGUILayout.ObjectField("Sprite", spriteValue, typeof(Sprite), false);
+			Sprite newSpriteValue = (Sprite)EditorGUILayout.ObjectField("Sprite", spriteValue, typeof(Sprite), false);
+			if (newSpriteValue != spriteValue)
+			{
+				spriteValue = newSpriteValue;
+				needsRepaint = true;
+			}
 
 			EditorGUILayout.Space();
-			sizeValue = EditorGUILayout.Slider("Icon Size (px)", sizeValue, MinSize, MaxSize);
+			float newSizeValue = EditorGUILayout.Slider("Icon Size (px)", sizeValue, MinSize, MaxSize);
+			if (!Mathf.Approximately(newSizeValue, sizeValue))
+			{
+				sizeValue = newSizeValue;
+				needsRepaint = true;
+			}
 
 			EditorGUILayout.Space();
 			EditorGUILayout.LabelField("Icon Position Offset", EditorStyles.boldLabel);
-			offsetValue = EditorGUILayout.Vector3Field("Offset", offsetValue);
+			Vector3 newOffsetValue = EditorGUILayout.Vector3Field("Offset", offsetValue);
+			if (newOffsetValue != offsetValue)
+			{
+				offsetValue = newOffsetValue;
+				needsRepaint = true;
+			}
+
+			// Repaint scene view immediately when values change
+			if (needsRepaint)
+			{
+				SceneView.RepaintAll();
+			}
 
 			EditorGUILayout.Space();
 			EditorGUILayout.LabelField("Auto Assign", EditorStyles.boldLabel);
@@ -560,6 +596,7 @@ namespace ManaGambit.EditorTools
 					SceneViewDropParentIcon.IconOffset = offsetValue;
 					Repaint();
 					SceneView.RepaintAll();
+					Close();
 				}
 			}
 		}

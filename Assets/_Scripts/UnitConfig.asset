@@ -15,6 +15,909 @@ MonoBehaviour:
   jsonAsset: {fileID: 4900000, guid: 35c83f83e93d9804db9dbd58244997a2, type: 3}
   loadOnEnable: 1
   units:
+  - pieceId: Archer
+    prefab: {fileID: 4260141316845940384, guid: 029143fc86c98dc4e9c622856f260cac, type: 3}
+    hp: 3
+    armor: 0
+    magicArmor: 0
+    critical: 0.1
+    dodge: 0.1
+    hpRegenPerSecond: 0
+    moveSpeed: 2.2
+    priority: 2
+    move:
+      manaCost: 1
+      patterns:
+      - dir: diagonal
+        rangeMin: 1
+        rangeMax: 7
+        leap: 0
+        stopOnHit: 0
+        passThrough: 0
+      overFriendly: 0
+      overEnemy: 0
+      postImpact:
+        behavior: 
+        radius: 0
+        random: 0
+      targetFriendly: 0
+    actions:
+    - name: Arrow Shot
+      shortDisplayName: Arrow Shot
+      type: basic
+      icon: Skill_WindArrow
+      windUpMs: 250
+      cooldownMs: 500
+      manaCost: 1
+      attack:
+        damage: 2
+        damageType: physical
+        speed: 10
+        patterns:
+        - dir: diagonal
+          rangeMin: 1
+          rangeMax: 5
+          leap: 0
+          stopOnHit: 1
+          passThrough: 0
+        overFriendly: 0
+        overEnemy: 0
+        stopOnHit: 0
+        maxTargets: 0
+        pierce: 0
+        knockback: 0
+        aoePattern:
+          dir: 
+          range: 0
+        aoeDamage:
+          center: 0
+          adjacent: 0
+        dot:
+          damage: 0
+          interval: 0
+          duration: 0
+        debuff:
+          speedReduction: 0
+          duration: 0
+        amount: 0
+        interval: 0
+        duration: 0
+        requireLos: 0
+        allowFriendlyTarget: 0
+      move:
+        manaCost: 0
+        patterns: []
+        overFriendly: 0
+        overEnemy: 0
+        postImpact:
+          behavior: 
+          radius: 0
+          random: 0
+        targetFriendly: 0
+      swap:
+        manaCost: 0
+        windUp: 0
+        cooldown: 0
+        patterns: []
+        overFriendly: 0
+        overEnemy: 0
+        targetFriendly: 0
+      buff:
+        duration: 0
+        effect:
+          rangeBonus: 0
+          gcdReduction: 0
+          shotCount: 0
+          moveSpeedBonus: 0
+          manaCostReduction: 0
+          pierce: 0
+        targets: 
+      aura:
+        duration: 0
+        radius: 0
+        effect:
+          armor: 0
+        targets: 
+      multiHit:
+        count: 0
+        damage: 0
+        interval: 0
+        iframes: 0
+    - name: Volley
+      shortDisplayName: Volley
+      type: skill
+      icon: Skill_RainOfArrows
+      windUpMs: 300
+      cooldownMs: 500
+      manaCost: 2
+      attack:
+        damage: 1
+        damageType: physical
+        speed: 8
+        patterns:
+        - dir: any
+          rangeMin: 1
+          rangeMax: 3
+          leap: 0
+          stopOnHit: 1
+          passThrough: 0
+        overFriendly: 1
+        overEnemy: 0
+        stopOnHit: 0
+        maxTargets: 0
+        pierce: 0
+        knockback: 0
+        aoePattern:
+          dir: 
+          range: 0
+        aoeDamage:
+          center: 0
+          adjacent: 0
+        dot:
+          damage: 0
+          interval: 0
+          duration: 0
+        debuff:
+          speedReduction: 0
+          duration: 0
+        amount: 3
+        interval: 300
+        duration: 400
+        requireLos: 0
+        allowFriendlyTarget: 0
+      move:
+        manaCost: 0
+        patterns: []
+        overFriendly: 0
+        overEnemy: 0
+        postImpact:
+          behavior: 
+          radius: 0
+          random: 0
+        targetFriendly: 0
+      swap:
+        manaCost: 0
+        windUp: 0
+        cooldown: 0
+        patterns: []
+        overFriendly: 0
+        overEnemy: 0
+        targetFriendly: 0
+      buff:
+        duration: 0
+        effect:
+          rangeBonus: 0
+          gcdReduction: 0
+          shotCount: 0
+          moveSpeedBonus: 0
+          manaCostReduction: 0
+          pierce: 0
+        targets: 
+      aura:
+        duration: 0
+        radius: 0
+        effect:
+          armor: 0
+        targets: 
+      multiHit:
+        count: 0
+        damage: 0
+        interval: 0
+        iframes: 0
+    - name: Rain of Arrows
+      shortDisplayName: Barrage
+      type: ult
+      icon: Skill_RainOfArrows
+      windUpMs: 200
+      cooldownMs: 10000
+      manaCost: 0
+      attack:
+        damage: 1
+        damageType: physical
+        speed: 8
+        patterns:
+        - dir: any
+          rangeMin: 1
+          rangeMax: 7
+          leap: 0
+          stopOnHit: 1
+          passThrough: 0
+        overFriendly: 1
+        overEnemy: 1
+        stopOnHit: 0
+        maxTargets: 1
+        pierce: 0
+        knockback: 0
+        aoePattern:
+          dir: 
+          range: 0
+        aoeDamage:
+          center: 0
+          adjacent: 0
+        dot:
+          damage: 0
+          interval: 0
+          duration: 0
+        debuff:
+          speedReduction: 0
+          duration: 0
+        amount: 6
+        interval: 200
+        duration: 1200
+        requireLos: 0
+        allowFriendlyTarget: 0
+      move:
+        manaCost: 0
+        patterns: []
+        overFriendly: 0
+        overEnemy: 0
+        postImpact:
+          behavior: 
+          radius: 0
+          random: 0
+        targetFriendly: 0
+      swap:
+        manaCost: 0
+        windUp: 0
+        cooldown: 0
+        patterns: []
+        overFriendly: 0
+        overEnemy: 0
+        targetFriendly: 0
+      buff:
+        duration: 0
+        effect:
+          rangeBonus: 0
+          gcdReduction: 0
+          shotCount: 0
+          moveSpeedBonus: 0
+          manaCostReduction: 0
+          pierce: 0
+        targets: 
+      aura:
+        duration: 0
+        radius: 0
+        effect:
+          armor: 0
+        targets: 
+      multiHit:
+        count: 0
+        damage: 0
+        interval: 0
+        iframes: 0
+  - pieceId: Brawler
+    prefab: {fileID: 9165385495350204545, guid: 28a37e1da0bb69b4e8b769c3934c8001, type: 3}
+    hp: 5
+    armor: 1
+    magicArmor: 1
+    critical: 0.1
+    dodge: 0.1
+    hpRegenPerSecond: 0
+    moveSpeed: 2.4
+    priority: 4
+    move:
+      manaCost: 1
+      patterns:
+      - dir: any
+        rangeMin: 1
+        rangeMax: 1
+        leap: 0
+        stopOnHit: 0
+        passThrough: 0
+      overFriendly: 0
+      overEnemy: 0
+      postImpact:
+        behavior: 
+        radius: 0
+        random: 0
+      targetFriendly: 0
+    actions:
+    - name: Punch
+      shortDisplayName: Punch
+      type: basic
+      icon: Skill_MeleeFistHit
+      windUpMs: 350
+      cooldownMs: 500
+      manaCost: 1
+      attack:
+        damage: 2
+        damageType: physical
+        speed: 0
+        patterns:
+        - dir: any
+          rangeMin: 1
+          rangeMax: 1
+          leap: 0
+          stopOnHit: 0
+          passThrough: 0
+        overFriendly: 0
+        overEnemy: 0
+        stopOnHit: 0
+        maxTargets: 0
+        pierce: 0
+        knockback: 0
+        aoePattern:
+          dir: 
+          range: 0
+        aoeDamage:
+          center: 0
+          adjacent: 0
+        dot:
+          damage: 0
+          interval: 0
+          duration: 0
+        debuff:
+          speedReduction: 0
+          duration: 0
+        amount: 0
+        interval: 0
+        duration: 0
+        requireLos: 0
+        allowFriendlyTarget: 0
+      move:
+        manaCost: 0
+        patterns: []
+        overFriendly: 0
+        overEnemy: 0
+        postImpact:
+          behavior: 
+          radius: 0
+          random: 0
+        targetFriendly: 0
+      swap:
+        manaCost: 0
+        windUp: 0
+        cooldown: 0
+        patterns: []
+        overFriendly: 0
+        overEnemy: 0
+        targetFriendly: 0
+      buff:
+        duration: 0
+        effect:
+          rangeBonus: 0
+          gcdReduction: 0
+          shotCount: 0
+          moveSpeedBonus: 0
+          manaCostReduction: 0
+          pierce: 0
+        targets: 
+      aura:
+        duration: 0
+        radius: 0
+        effect:
+          armor: 0
+        targets: 
+      multiHit:
+        count: 0
+        damage: 0
+        interval: 0
+        iframes: 0
+    - name: Uppercut
+      shortDisplayName: Uppercut
+      type: skill
+      icon: Skill_MeleeFistHit
+      windUpMs: 500
+      cooldownMs: 500
+      manaCost: 2
+      attack:
+        damage: 3
+        damageType: physical
+        speed: 0
+        patterns:
+        - dir: any
+          rangeMin: 1
+          rangeMax: 1
+          leap: 0
+          stopOnHit: 0
+          passThrough: 0
+        overFriendly: 0
+        overEnemy: 0
+        stopOnHit: 0
+        maxTargets: 0
+        pierce: 0
+        knockback: 1
+        aoePattern:
+          dir: 
+          range: 0
+        aoeDamage:
+          center: 0
+          adjacent: 0
+        dot:
+          damage: 0
+          interval: 0
+          duration: 0
+        debuff:
+          speedReduction: 0
+          duration: 0
+        amount: 0
+        interval: 0
+        duration: 0
+        requireLos: 0
+        allowFriendlyTarget: 0
+      move:
+        manaCost: 0
+        patterns: []
+        overFriendly: 0
+        overEnemy: 0
+        postImpact:
+          behavior: 
+          radius: 0
+          random: 0
+        targetFriendly: 0
+      swap:
+        manaCost: 0
+        windUp: 0
+        cooldown: 0
+        patterns: []
+        overFriendly: 0
+        overEnemy: 0
+        targetFriendly: 0
+      buff:
+        duration: 0
+        effect:
+          rangeBonus: 0
+          gcdReduction: 0
+          shotCount: 0
+          moveSpeedBonus: 0
+          manaCostReduction: 0
+          pierce: 0
+        targets: 
+      aura:
+        duration: 0
+        radius: 0
+        effect:
+          armor: 0
+        targets: 
+      multiHit:
+        count: 0
+        damage: 0
+        interval: 0
+        iframes: 0
+    - name: Swap
+      shortDisplayName: Swap
+      type: skill
+      icon: Skill_SwapPosition
+      windUpMs: 2000
+      cooldownMs: 10000
+      manaCost: 0
+      attack:
+        damage: 0
+        damageType: 
+        speed: 0
+        patterns: []
+        overFriendly: 0
+        overEnemy: 0
+        stopOnHit: 0
+        maxTargets: 0
+        pierce: 0
+        knockback: 0
+        aoePattern:
+          dir: 
+          range: 0
+        aoeDamage:
+          center: 0
+          adjacent: 0
+        dot:
+          damage: 0
+          interval: 0
+          duration: 0
+        debuff:
+          speedReduction: 0
+          duration: 0
+        amount: 0
+        interval: 0
+        duration: 0
+        requireLos: 0
+        allowFriendlyTarget: 0
+      move:
+        manaCost: 0
+        patterns: []
+        overFriendly: 0
+        overEnemy: 0
+        postImpact:
+          behavior: 
+          radius: 0
+          random: 0
+        targetFriendly: 0
+      swap:
+        manaCost: 4
+        windUp: 250
+        cooldown: 500
+        patterns:
+        - dir: any
+          rangeMin: 1
+          rangeMax: 7
+          leap: 0
+          stopOnHit: 0
+          passThrough: 1
+        overFriendly: 1
+        overEnemy: 1
+        targetFriendly: 1
+      buff:
+        duration: 0
+        effect:
+          rangeBonus: 0
+          gcdReduction: 0
+          shotCount: 0
+          moveSpeedBonus: 0
+          manaCostReduction: 0
+          pierce: 0
+        targets: 
+      aura:
+        duration: 0
+        radius: 0
+        effect:
+          armor: 0
+        targets: 
+      multiHit:
+        count: 0
+        damage: 0
+        interval: 0
+        iframes: 0
+    - name: Rally
+      shortDisplayName: Rally
+      type: ult
+      icon: Skill_Flags
+      windUpMs: 500
+      cooldownMs: 10000
+      manaCost: 0
+      attack:
+        damage: 0
+        damageType: 
+        speed: 0
+        patterns: []
+        overFriendly: 0
+        overEnemy: 0
+        stopOnHit: 0
+        maxTargets: 0
+        pierce: 0
+        knockback: 0
+        aoePattern:
+          dir: 
+          range: 0
+        aoeDamage:
+          center: 0
+          adjacent: 0
+        dot:
+          damage: 0
+          interval: 0
+          duration: 0
+        debuff:
+          speedReduction: 0
+          duration: 0
+        amount: 0
+        interval: 0
+        duration: 0
+        requireLos: 0
+        allowFriendlyTarget: 0
+      move:
+        manaCost: 0
+        patterns: []
+        overFriendly: 0
+        overEnemy: 0
+        postImpact:
+          behavior: 
+          radius: 0
+          random: 0
+        targetFriendly: 0
+      swap:
+        manaCost: 0
+        windUp: 0
+        cooldown: 0
+        patterns: []
+        overFriendly: 0
+        overEnemy: 0
+        targetFriendly: 0
+      buff:
+        duration: 6000
+        effect:
+          rangeBonus: 0
+          gcdReduction: 0
+          shotCount: 0
+          moveSpeedBonus: 0.2
+          manaCostReduction: 0
+          pierce: 0
+        targets: team
+      aura:
+        duration: 0
+        radius: 0
+        effect:
+          armor: 0
+        targets: 
+      multiHit:
+        count: 0
+        damage: 0
+        interval: 0
+        iframes: 0
+  - pieceId: GhostBlader
+    prefab: {fileID: 1878592872099795557, guid: b7f47472c2dc70342925a330744c3f4a, type: 3}
+    hp: 3
+    armor: 1
+    magicArmor: 1
+    critical: 0.1
+    dodge: 0.1
+    hpRegenPerSecond: 0
+    moveSpeed: 3
+    priority: 3
+    move:
+      manaCost: 1
+      patterns:
+      - dir: any
+        rangeMin: 1
+        rangeMax: 3
+        leap: 1
+        stopOnHit: 0
+        passThrough: 0
+      overFriendly: 1
+      overEnemy: 0
+      postImpact:
+        behavior: 
+        radius: 0
+        random: 0
+      targetFriendly: 0
+    actions:
+    - name: Leap-Strike
+      shortDisplayName: Leap-Strike
+      type: basic
+      icon: Whisk_Dash
+      windUpMs: 250
+      cooldownMs: 500
+      manaCost: 1
+      attack:
+        damage: 3
+        damageType: physical
+        speed: 0
+        patterns:
+        - dir: any
+          rangeMin: 1
+          rangeMax: 3
+          leap: 0
+          stopOnHit: 0
+          passThrough: 0
+        overFriendly: 1
+        overEnemy: 1
+        stopOnHit: 0
+        maxTargets: 0
+        pierce: 0
+        knockback: 0
+        aoePattern:
+          dir: 
+          range: 0
+        aoeDamage:
+          center: 0
+          adjacent: 0
+        dot:
+          damage: 0
+          interval: 0
+          duration: 0
+        debuff:
+          speedReduction: 0
+          duration: 0
+        amount: 0
+        interval: 0
+        duration: 0
+        requireLos: 0
+        allowFriendlyTarget: 0
+      move:
+        manaCost: 0
+        patterns:
+        - dir: any
+          rangeMin: 1
+          rangeMax: 3
+          leap: 0
+          stopOnHit: 1
+          passThrough: 0
+        overFriendly: 1
+        overEnemy: 1
+        postImpact:
+          behavior: LandNearTarget
+          radius: 1
+          random: 0
+        targetFriendly: 0
+      swap:
+        manaCost: 0
+        windUp: 0
+        cooldown: 0
+        patterns: []
+        overFriendly: 0
+        overEnemy: 0
+        targetFriendly: 0
+      buff:
+        duration: 0
+        effect:
+          rangeBonus: 0
+          gcdReduction: 0
+          shotCount: 0
+          moveSpeedBonus: 0
+          manaCostReduction: 0
+          pierce: 0
+        targets: 
+      aura:
+        duration: 0
+        radius: 0
+        effect:
+          armor: 0
+        targets: 
+      multiHit:
+        count: 0
+        damage: 0
+        interval: 0
+        iframes: 0
+    - name: Shadow Barrage
+      shortDisplayName: Shadow Barrage
+      type: skill
+      icon: Skill_ShadowDodge
+      windUpMs: 1000
+      cooldownMs: 2000
+      manaCost: 2
+      attack:
+        damage: 4
+        damageType: physical
+        speed: 0
+        patterns:
+        - dir: any
+          rangeMin: 1
+          rangeMax: 3
+          leap: 0
+          stopOnHit: 0
+          passThrough: 0
+        overFriendly: 1
+        overEnemy: 1
+        stopOnHit: 0
+        maxTargets: 0
+        pierce: 0
+        knockback: 0
+        aoePattern:
+          dir: 
+          range: 0
+        aoeDamage:
+          center: 0
+          adjacent: 0
+        dot:
+          damage: 0
+          interval: 0
+          duration: 0
+        debuff:
+          speedReduction: 0
+          duration: 0
+        amount: 0
+        interval: 0
+        duration: 0
+        requireLos: 0
+        allowFriendlyTarget: 0
+      move:
+        manaCost: 0
+        patterns:
+        - dir: any
+          rangeMin: 1
+          rangeMax: 3
+          leap: 1
+          stopOnHit: 0
+          passThrough: 0
+        overFriendly: 1
+        overEnemy: 1
+        postImpact:
+          behavior: LandNearTarget
+          radius: 1
+          random: 0
+        targetFriendly: 0
+      swap:
+        manaCost: 0
+        windUp: 0
+        cooldown: 0
+        patterns: []
+        overFriendly: 0
+        overEnemy: 0
+        targetFriendly: 0
+      buff:
+        duration: 0
+        effect:
+          rangeBonus: 0
+          gcdReduction: 0
+          shotCount: 0
+          moveSpeedBonus: 0
+          manaCostReduction: 0
+          pierce: 0
+        targets: 
+      aura:
+        duration: 0
+        radius: 0
+        effect:
+          armor: 0
+        targets: 
+      multiHit:
+        count: 0
+        damage: 0
+        interval: 0
+        iframes: 0
+    - name: Phantom Flurry
+      shortDisplayName: Phantom Flurry
+      type: ult
+      icon: Skill_ShadowDagger
+      windUpMs: 250
+      cooldownMs: 10000
+      manaCost: 0
+      attack:
+        damage: 6
+        damageType: physical
+        speed: 0
+        patterns:
+        - dir: any
+          rangeMin: 1
+          rangeMax: 3
+          leap: 0
+          stopOnHit: 0
+          passThrough: 0
+        overFriendly: 1
+        overEnemy: 1
+        stopOnHit: 0
+        maxTargets: 0
+        pierce: 0
+        knockback: 0
+        aoePattern:
+          dir: 
+          range: 0
+        aoeDamage:
+          center: 0
+          adjacent: 0
+        dot:
+          damage: 0
+          interval: 0
+          duration: 0
+        debuff:
+          speedReduction: 0
+          duration: 0
+        amount: 0
+        interval: 0
+        duration: 0
+        requireLos: 0
+        allowFriendlyTarget: 0
+      move:
+        manaCost: 0
+        patterns:
+        - dir: any
+          rangeMin: 1
+          rangeMax: 3
+          leap: 1
+          stopOnHit: 0
+          passThrough: 0
+        overFriendly: 1
+        overEnemy: 1
+        postImpact:
+          behavior: LandNearTarget
+          radius: 3
+          random: 1
+        targetFriendly: 0
+      swap:
+        manaCost: 0
+        windUp: 0
+        cooldown: 0
+        patterns: []
+        overFriendly: 0
+        overEnemy: 0
+        targetFriendly: 0
+      buff:
+        duration: 0
+        effect:
+          rangeBonus: 0
+          gcdReduction: 0
+          shotCount: 0
+          moveSpeedBonus: 0
+          manaCostReduction: 0
+          pierce: 0
+        targets: 
+      aura:
+        duration: 0
+        radius: 0
+        effect:
+          armor: 0
+        targets: 
+      multiHit:
+        count: 0
+        damage: 0
+        interval: 0
+        iframes: 0
   - pieceId: Knight
     prefab: {fileID: 291575549601487045, guid: a7e1a6e4f7e7f654384d7e29430808f8, type: 3}
     hp: 4
@@ -46,7 +949,7 @@ MonoBehaviour:
       shortDisplayName: Slash
       type: basic
       icon: Skill_SwordSplash
-      windUpMs: 250
+      windUpMs: 500
       cooldownMs: 500
       manaCost: 1
       attack:
@@ -285,276 +1188,6 @@ MonoBehaviour:
         damage: 0
         interval: 0
         iframes: 0
-  - pieceId: Archer
-    prefab: {fileID: 4260141316845940384, guid: 029143fc86c98dc4e9c622856f260cac, type: 3}
-    hp: 3
-    armor: 0
-    magicArmor: 0
-    critical: 0.1
-    dodge: 0.1
-    hpRegenPerSecond: 0
-    moveSpeed: 2.2
-    priority: 2
-    move:
-      manaCost: 1
-      patterns:
-      - dir: diagonal
-        rangeMin: 1
-        rangeMax: 7
-        leap: 0
-        stopOnHit: 0
-        passThrough: 0
-      overFriendly: 0
-      overEnemy: 0
-      postImpact:
-        behavior: 
-        radius: 0
-        random: 0
-      targetFriendly: 0
-    actions:
-    - name: Arrow Shot
-      shortDisplayName: Arrow Shot
-      type: basic
-      icon: Skill_WindArrow
-      windUpMs: 250
-      cooldownMs: 500
-      manaCost: 1
-      attack:
-        damage: 2
-        damageType: physical
-        speed: 10
-        patterns:
-        - dir: diagonal
-          rangeMin: 1
-          rangeMax: 5
-          leap: 0
-          stopOnHit: 1
-          passThrough: 0
-        overFriendly: 0
-        overEnemy: 0
-        stopOnHit: 0
-        maxTargets: 0
-        pierce: 0
-        knockback: 0
-        aoePattern:
-          dir: 
-          range: 0
-        aoeDamage:
-          center: 0
-          adjacent: 0
-        dot:
-          damage: 0
-          interval: 0
-          duration: 0
-        debuff:
-          speedReduction: 0
-          duration: 0
-        amount: 0
-        interval: 0
-        duration: 0
-        requireLos: 0
-        allowFriendlyTarget: 0
-      move:
-        manaCost: 0
-        patterns: []
-        overFriendly: 0
-        overEnemy: 0
-        postImpact:
-          behavior: 
-          radius: 0
-          random: 0
-        targetFriendly: 0
-      swap:
-        manaCost: 0
-        windUp: 0
-        cooldown: 0
-        patterns: []
-        overFriendly: 0
-        overEnemy: 0
-        targetFriendly: 0
-      buff:
-        duration: 0
-        effect:
-          rangeBonus: 0
-          gcdReduction: 0
-          shotCount: 0
-          moveSpeedBonus: 0
-          manaCostReduction: 0
-          pierce: 0
-        targets: 
-      aura:
-        duration: 0
-        radius: 0
-        effect:
-          armor: 0
-        targets: 
-      multiHit:
-        count: 0
-        damage: 0
-        interval: 0
-        iframes: 0
-    - name: Volley
-      shortDisplayName: Volley
-      type: skill
-      icon: Skill_RainOfArrows
-      windUpMs: 400
-      cooldownMs: 500
-      manaCost: 2
-      attack:
-        damage: 1
-        damageType: physical
-        speed: 8
-        patterns:
-        - dir: any
-          rangeMin: 1
-          rangeMax: 3
-          leap: 0
-          stopOnHit: 1
-          passThrough: 0
-        overFriendly: 1
-        overEnemy: 0
-        stopOnHit: 0
-        maxTargets: 0
-        pierce: 0
-        knockback: 0
-        aoePattern:
-          dir: 
-          range: 0
-        aoeDamage:
-          center: 0
-          adjacent: 0
-        dot:
-          damage: 0
-          interval: 0
-          duration: 0
-        debuff:
-          speedReduction: 0
-          duration: 0
-        amount: 3
-        interval: 200
-        duration: 400
-        requireLos: 0
-        allowFriendlyTarget: 0
-      move:
-        manaCost: 0
-        patterns: []
-        overFriendly: 0
-        overEnemy: 0
-        postImpact:
-          behavior: 
-          radius: 0
-          random: 0
-        targetFriendly: 0
-      swap:
-        manaCost: 0
-        windUp: 0
-        cooldown: 0
-        patterns: []
-        overFriendly: 0
-        overEnemy: 0
-        targetFriendly: 0
-      buff:
-        duration: 0
-        effect:
-          rangeBonus: 0
-          gcdReduction: 0
-          shotCount: 0
-          moveSpeedBonus: 0
-          manaCostReduction: 0
-          pierce: 0
-        targets: 
-      aura:
-        duration: 0
-        radius: 0
-        effect:
-          armor: 0
-        targets: 
-      multiHit:
-        count: 0
-        damage: 0
-        interval: 0
-        iframes: 0
-    - name: Rain of Arrows
-      shortDisplayName: Barrage
-      type: ult
-      icon: Skill_RainOfArrows
-      windUpMs: 250
-      cooldownMs: 10000
-      manaCost: 0
-      attack:
-        damage: 1
-        damageType: physical
-        speed: 8
-        patterns:
-        - dir: any
-          rangeMin: 1
-          rangeMax: 7
-          leap: 0
-          stopOnHit: 1
-          passThrough: 0
-        overFriendly: 1
-        overEnemy: 1
-        stopOnHit: 0
-        maxTargets: 1
-        pierce: 0
-        knockback: 0
-        aoePattern:
-          dir: 
-          range: 0
-        aoeDamage:
-          center: 0
-          adjacent: 0
-        dot:
-          damage: 0
-          interval: 0
-          duration: 0
-        debuff:
-          speedReduction: 0
-          duration: 0
-        amount: 6
-        interval: 250
-        duration: 0
-        requireLos: 0
-        allowFriendlyTarget: 0
-      move:
-        manaCost: 0
-        patterns: []
-        overFriendly: 0
-        overEnemy: 0
-        postImpact:
-          behavior: 
-          radius: 0
-          random: 0
-        targetFriendly: 0
-      swap:
-        manaCost: 0
-        windUp: 0
-        cooldown: 0
-        patterns: []
-        overFriendly: 0
-        overEnemy: 0
-        targetFriendly: 0
-      buff:
-        duration: 0
-        effect:
-          rangeBonus: 0
-          gcdReduction: 0
-          shotCount: 0
-          moveSpeedBonus: 0
-          manaCostReduction: 0
-          pierce: 0
-        targets: 
-      aura:
-        duration: 0
-        radius: 0
-        effect:
-          armor: 0
-        targets: 
-      multiHit:
-        count: 0
-        damage: 0
-        interval: 0
-        iframes: 0
   - pieceId: Mage
     prefab: {fileID: 8791475369200504351, guid: 25485367bcf5d2c4d948f61ba5df6059, type: 3}
     hp: 3
@@ -586,7 +1219,7 @@ MonoBehaviour:
       shortDisplayName: Bolt
       type: basic
       icon: Skill_FireBall
-      windUpMs: 250
+      windUpMs: 750
       cooldownMs: 500
       manaCost: 1
       attack:
@@ -667,7 +1300,7 @@ MonoBehaviour:
       shortDisplayName: Fireball
       type: skill
       icon: Skill_FireElement
-      windUpMs: 500
+      windUpMs: 1200
       cooldownMs: 10000
       manaCost: 3
       attack:
@@ -829,7 +1462,7 @@ MonoBehaviour:
       shortDisplayName: Arcane Surge
       type: ult
       icon: Skill_ArcaneKnowledge
-      windUpMs: 250
+      windUpMs: 500
       cooldownMs: 10000
       manaCost: 0
       attack:
@@ -900,294 +1533,6 @@ MonoBehaviour:
         damage: 0
         interval: 0
         iframes: 0
-  - pieceId: GhostBlader
-    prefab: {fileID: 1878592872099795557, guid: b7f47472c2dc70342925a330744c3f4a, type: 3}
-    hp: 3
-    armor: 1
-    magicArmor: 1
-    critical: 0.1
-    dodge: 0.1
-    hpRegenPerSecond: 0
-    moveSpeed: 3
-    priority: 3
-    move:
-      manaCost: 1
-      patterns:
-      - dir: any
-        rangeMin: 1
-        rangeMax: 3
-        leap: 1
-        stopOnHit: 0
-        passThrough: 0
-      overFriendly: 1
-      overEnemy: 0
-      postImpact:
-        behavior: 
-        radius: 0
-        random: 0
-      targetFriendly: 0
-    actions:
-    - name: Leap-Strike
-      shortDisplayName: Leap-Strike
-      type: basic
-      icon: Whisk_Dash
-      windUpMs: 250
-      cooldownMs: 500
-      manaCost: 1
-      attack:
-        damage: 3
-        damageType: physical
-        speed: 0
-        patterns:
-        - dir: any
-          rangeMin: 1
-          rangeMax: 3
-          leap: 0
-          stopOnHit: 0
-          passThrough: 0
-        overFriendly: 1
-        overEnemy: 1
-        stopOnHit: 0
-        maxTargets: 0
-        pierce: 0
-        knockback: 0
-        aoePattern:
-          dir: 
-          range: 0
-        aoeDamage:
-          center: 0
-          adjacent: 0
-        dot:
-          damage: 0
-          interval: 0
-          duration: 0
-        debuff:
-          speedReduction: 0
-          duration: 0
-        amount: 0
-        interval: 0
-        duration: 0
-        requireLos: 0
-        allowFriendlyTarget: 0
-      move:
-        manaCost: 0
-        patterns:
-        - dir: any
-          rangeMin: 1
-          rangeMax: 3
-          leap: 0
-          stopOnHit: 1
-          passThrough: 0
-        overFriendly: 1
-        overEnemy: 1
-        postImpact:
-          behavior: LandNearTarget
-          radius: 1
-          random: 0
-        targetFriendly: 0
-      swap:
-        manaCost: 0
-        windUp: 0
-        cooldown: 0
-        patterns: []
-        overFriendly: 0
-        overEnemy: 0
-        targetFriendly: 0
-      buff:
-        duration: 0
-        effect:
-          rangeBonus: 0
-          gcdReduction: 0
-          shotCount: 0
-          moveSpeedBonus: 0
-          manaCostReduction: 0
-          pierce: 0
-        targets: 
-      aura:
-        duration: 0
-        radius: 0
-        effect:
-          armor: 0
-        targets: 
-      multiHit:
-        count: 0
-        damage: 0
-        interval: 0
-        iframes: 0
-    - name: Shadow Barrage
-      shortDisplayName: Shadow Barrage
-      type: skill
-      icon: Skill_ShadowDodge
-      windUpMs: 300
-      cooldownMs: 500
-      manaCost: 2
-      attack:
-        damage: 4
-        damageType: physical
-        speed: 0
-        patterns:
-        - dir: any
-          rangeMin: 1
-          rangeMax: 3
-          leap: 0
-          stopOnHit: 0
-          passThrough: 0
-        overFriendly: 1
-        overEnemy: 1
-        stopOnHit: 0
-        maxTargets: 0
-        pierce: 0
-        knockback: 0
-        aoePattern:
-          dir: 
-          range: 0
-        aoeDamage:
-          center: 0
-          adjacent: 0
-        dot:
-          damage: 0
-          interval: 0
-          duration: 0
-        debuff:
-          speedReduction: 0
-          duration: 0
-        amount: 0
-        interval: 0
-        duration: 0
-        requireLos: 0
-        allowFriendlyTarget: 0
-      move:
-        manaCost: 0
-        patterns:
-        - dir: any
-          rangeMin: 1
-          rangeMax: 3
-          leap: 1
-          stopOnHit: 0
-          passThrough: 0
-        overFriendly: 1
-        overEnemy: 1
-        postImpact:
-          behavior: LandNearTarget
-          radius: 1
-          random: 0
-        targetFriendly: 0
-      swap:
-        manaCost: 0
-        windUp: 0
-        cooldown: 0
-        patterns: []
-        overFriendly: 0
-        overEnemy: 0
-        targetFriendly: 0
-      buff:
-        duration: 0
-        effect:
-          rangeBonus: 0
-          gcdReduction: 0
-          shotCount: 0
-          moveSpeedBonus: 0
-          manaCostReduction: 0
-          pierce: 0
-        targets: 
-      aura:
-        duration: 0
-        radius: 0
-        effect:
-          armor: 0
-        targets: 
-      multiHit:
-        count: 0
-        damage: 0
-        interval: 0
-        iframes: 0
-    - name: Phantom Flurry
-      shortDisplayName: Phantom Flurry
-      type: ult
-      icon: Skill_ShadowDagger
-      windUpMs: 250
-      cooldownMs: 10000
-      manaCost: 0
-      attack:
-        damage: 6
-        damageType: physical
-        speed: 0
-        patterns:
-        - dir: any
-          rangeMin: 1
-          rangeMax: 3
-          leap: 0
-          stopOnHit: 0
-          passThrough: 0
-        overFriendly: 1
-        overEnemy: 1
-        stopOnHit: 0
-        maxTargets: 0
-        pierce: 0
-        knockback: 0
-        aoePattern:
-          dir: 
-          range: 0
-        aoeDamage:
-          center: 0
-          adjacent: 0
-        dot:
-          damage: 0
-          interval: 0
-          duration: 0
-        debuff:
-          speedReduction: 0
-          duration: 0
-        amount: 0
-        interval: 0
-        duration: 0
-        requireLos: 0
-        allowFriendlyTarget: 0
-      move:
-        manaCost: 0
-        patterns:
-        - dir: any
-          rangeMin: 1
-          rangeMax: 3
-          leap: 1
-          stopOnHit: 0
-          passThrough: 0
-        overFriendly: 1
-        overEnemy: 1
-        postImpact:
-          behavior: LandNearTarget
-          radius: 3
-          random: 1
-        targetFriendly: 0
-      swap:
-        manaCost: 0
-        windUp: 0
-        cooldown: 0
-        patterns: []
-        overFriendly: 0
-        overEnemy: 0
-        targetFriendly: 0
-      buff:
-        duration: 0
-        effect:
-          rangeBonus: 0
-          gcdReduction: 0
-          shotCount: 0
-          moveSpeedBonus: 0
-          manaCostReduction: 0
-          pierce: 0
-        targets: 
-      aura:
-        duration: 0
-        radius: 0
-        effect:
-          armor: 0
-        targets: 
-      multiHit:
-        count: 0
-        damage: 0
-        interval: 0
-        iframes: 0
   - pieceId: Rifleman
     prefab: {fileID: 2944862546239038950, guid: 2d344234a6706574a94a3f5e3f68af26, type: 3}
     hp: 3
@@ -1219,7 +1564,7 @@ MonoBehaviour:
       shortDisplayName: Rifle Shot
       type: basic
       icon: Skill_GunShoot
-      windUpMs: 250
+      windUpMs: 100
       cooldownMs: 500
       manaCost: 1
       attack:
@@ -1300,7 +1645,7 @@ MonoBehaviour:
       shortDisplayName: Piercing
       type: skill
       icon: Skill_BombardShot
-      windUpMs: 350
+      windUpMs: 0
       cooldownMs: 500
       manaCost: 3
       attack:
@@ -1381,7 +1726,7 @@ MonoBehaviour:
       shortDisplayName: Snipe
       type: ult
       icon: Skill_MonsteHunter
-      windUpMs: 250
+      windUpMs: 500
       cooldownMs: 10000
       manaCost: 0
       attack:
@@ -1447,351 +1792,6 @@ MonoBehaviour:
           manaCostReduction: 0
           pierce: 0
         targets: 
-      aura:
-        duration: 0
-        radius: 0
-        effect:
-          armor: 0
-        targets: 
-      multiHit:
-        count: 0
-        damage: 0
-        interval: 0
-        iframes: 0
-  - pieceId: Brawler
-    prefab: {fileID: 9165385495350204545, guid: 28a37e1da0bb69b4e8b769c3934c8001, type: 3}
-    hp: 5
-    armor: 1
-    magicArmor: 1
-    critical: 0.1
-    dodge: 0.1
-    hpRegenPerSecond: 0
-    moveSpeed: 2.4
-    priority: 4
-    move:
-      manaCost: 1
-      patterns:
-      - dir: any
-        rangeMin: 1
-        rangeMax: 1
-        leap: 0
-        stopOnHit: 0
-        passThrough: 0
-      overFriendly: 0
-      overEnemy: 0
-      postImpact:
-        behavior: 
-        radius: 0
-        random: 0
-      targetFriendly: 0
-    actions:
-    - name: Punch
-      shortDisplayName: Punch
-      type: basic
-      icon: Skill_MeleeFistHit
-      windUpMs: 250
-      cooldownMs: 500
-      manaCost: 1
-      attack:
-        damage: 2
-        damageType: physical
-        speed: 0
-        patterns:
-        - dir: any
-          rangeMin: 1
-          rangeMax: 1
-          leap: 0
-          stopOnHit: 0
-          passThrough: 0
-        overFriendly: 0
-        overEnemy: 0
-        stopOnHit: 0
-        maxTargets: 0
-        pierce: 0
-        knockback: 0
-        aoePattern:
-          dir: 
-          range: 0
-        aoeDamage:
-          center: 0
-          adjacent: 0
-        dot:
-          damage: 0
-          interval: 0
-          duration: 0
-        debuff:
-          speedReduction: 0
-          duration: 0
-        amount: 0
-        interval: 0
-        duration: 0
-        requireLos: 0
-        allowFriendlyTarget: 0
-      move:
-        manaCost: 0
-        patterns: []
-        overFriendly: 0
-        overEnemy: 0
-        postImpact:
-          behavior: 
-          radius: 0
-          random: 0
-        targetFriendly: 0
-      swap:
-        manaCost: 0
-        windUp: 0
-        cooldown: 0
-        patterns: []
-        overFriendly: 0
-        overEnemy: 0
-        targetFriendly: 0
-      buff:
-        duration: 0
-        effect:
-          rangeBonus: 0
-          gcdReduction: 0
-          shotCount: 0
-          moveSpeedBonus: 0
-          manaCostReduction: 0
-          pierce: 0
-        targets: 
-      aura:
-        duration: 0
-        radius: 0
-        effect:
-          armor: 0
-        targets: 
-      multiHit:
-        count: 0
-        damage: 0
-        interval: 0
-        iframes: 0
-    - name: Uppercut
-      shortDisplayName: Uppercut
-      type: skill
-      icon: Skill_MeleeFistHit
-      windUpMs: 350
-      cooldownMs: 500
-      manaCost: 2
-      attack:
-        damage: 3
-        damageType: physical
-        speed: 0
-        patterns:
-        - dir: any
-          rangeMin: 1
-          rangeMax: 1
-          leap: 0
-          stopOnHit: 0
-          passThrough: 0
-        overFriendly: 0
-        overEnemy: 0
-        stopOnHit: 0
-        maxTargets: 0
-        pierce: 0
-        knockback: 1
-        aoePattern:
-          dir: 
-          range: 0
-        aoeDamage:
-          center: 0
-          adjacent: 0
-        dot:
-          damage: 0
-          interval: 0
-          duration: 0
-        debuff:
-          speedReduction: 0
-          duration: 0
-        amount: 0
-        interval: 0
-        duration: 0
-        requireLos: 0
-        allowFriendlyTarget: 0
-      move:
-        manaCost: 0
-        patterns: []
-        overFriendly: 0
-        overEnemy: 0
-        postImpact:
-          behavior: 
-          radius: 0
-          random: 0
-        targetFriendly: 0
-      swap:
-        manaCost: 0
-        windUp: 0
-        cooldown: 0
-        patterns: []
-        overFriendly: 0
-        overEnemy: 0
-        targetFriendly: 0
-      buff:
-        duration: 0
-        effect:
-          rangeBonus: 0
-          gcdReduction: 0
-          shotCount: 0
-          moveSpeedBonus: 0
-          manaCostReduction: 0
-          pierce: 0
-        targets: 
-      aura:
-        duration: 0
-        radius: 0
-        effect:
-          armor: 0
-        targets: 
-      multiHit:
-        count: 0
-        damage: 0
-        interval: 0
-        iframes: 0
-    - name: Swap
-      shortDisplayName: Swap
-      type: skill
-      icon: Skill_SwapPosition
-      windUpMs: 0
-      cooldownMs: 0
-      manaCost: 0
-      attack:
-        damage: 0
-        damageType: 
-        speed: 0
-        patterns: []
-        overFriendly: 0
-        overEnemy: 0
-        stopOnHit: 0
-        maxTargets: 0
-        pierce: 0
-        knockback: 0
-        aoePattern:
-          dir: 
-          range: 0
-        aoeDamage:
-          center: 0
-          adjacent: 0
-        dot:
-          damage: 0
-          interval: 0
-          duration: 0
-        debuff:
-          speedReduction: 0
-          duration: 0
-        amount: 0
-        interval: 0
-        duration: 0
-        requireLos: 0
-        allowFriendlyTarget: 0
-      move:
-        manaCost: 0
-        patterns: []
-        overFriendly: 0
-        overEnemy: 0
-        postImpact:
-          behavior: 
-          radius: 0
-          random: 0
-        targetFriendly: 0
-      swap:
-        manaCost: 4
-        windUp: 250
-        cooldown: 500
-        patterns:
-        - dir: any
-          rangeMin: 1
-          rangeMax: 7
-          leap: 0
-          stopOnHit: 0
-          passThrough: 1
-        overFriendly: 1
-        overEnemy: 1
-        targetFriendly: 1
-      buff:
-        duration: 0
-        effect:
-          rangeBonus: 0
-          gcdReduction: 0
-          shotCount: 0
-          moveSpeedBonus: 0
-          manaCostReduction: 0
-          pierce: 0
-        targets: 
-      aura:
-        duration: 0
-        radius: 0
-        effect:
-          armor: 0
-        targets: 
-      multiHit:
-        count: 0
-        damage: 0
-        interval: 0
-        iframes: 0
-    - name: Rally
-      shortDisplayName: Rally
-      type: ult
-      icon: Skill_Flags
-      windUpMs: 250
-      cooldownMs: 10000
-      manaCost: 0
-      attack:
-        damage: 0
-        damageType: 
-        speed: 0
-        patterns: []
-        overFriendly: 0
-        overEnemy: 0
-        stopOnHit: 0
-        maxTargets: 0
-        pierce: 0
-        knockback: 0
-        aoePattern:
-          dir: 
-          range: 0
-        aoeDamage:
-          center: 0
-          adjacent: 0
-        dot:
-          damage: 0
-          interval: 0
-          duration: 0
-        debuff:
-          speedReduction: 0
-          duration: 0
-        amount: 0
-        interval: 0
-        duration: 0
-        requireLos: 0
-        allowFriendlyTarget: 0
-      move:
-        manaCost: 0
-        patterns: []
-        overFriendly: 0
-        overEnemy: 0
-        postImpact:
-          behavior: 
-          radius: 0
-          random: 0
-        targetFriendly: 0
-      swap:
-        manaCost: 0
-        windUp: 0
-        cooldown: 0
-        patterns: []
-        overFriendly: 0
-        overEnemy: 0
-        targetFriendly: 0
-      buff:
-        duration: 6000
-        effect:
-          rangeBonus: 0
-          gcdReduction: 0
-          shotCount: 0
-          moveSpeedBonus: 0.2
-          manaCostReduction: 0
-          pierce: 0
-        targets: team
       aura:
         duration: 0
         radius: 0

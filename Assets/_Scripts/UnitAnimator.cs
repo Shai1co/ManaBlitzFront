@@ -1,20 +1,68 @@
 
 using UnityEngine;
+using Cysharp.Threading.Tasks;
 
 namespace ManaGambit
 {
+    public enum AnimationControlMode
+    {
+        DirectStateControl,
+        ParameterStateControl
+    }
+
     public class UnitAnimator : MonoBehaviour
     {
+        [Header("Animation Control")]
+        [SerializeField] private AnimationControlMode controlMode = AnimationControlMode.DirectStateControl;
         [SerializeField] private Animator animator;
+        [SerializeField] private bool autoReturnToIdleAfterSkills = true;
+        [SerializeField] private float autoReturnIdleCrossfadeSeconds = 0.15f;
+        private const int AutoReturnPaddingMs = 50;
+        [SerializeField] private bool restoreDefaultYawAfterMove = true;
+        [Tooltip("Very short crossfade used when stopping Walk due to arrival or stall.")]
+        [SerializeField] private float moveStopIdleCrossfadeSeconds = 0.06f;
+        [Header("Motion-driven Walk Control")]
+        [Tooltip("Minimum planar displacement per frame to be considered 'moving' (world units).")]
+        [SerializeField] private float minVisiblePlanarDelta = 0.005f;
+        [Tooltip("How many consecutive 'no-move' frames before snapping to Idle during Moving.")]
+        [SerializeField] private int stalledFramesBeforeIdle = 5;
+        [Tooltip("Minimum time in seconds before stall detection can trigger during movement.")]
+        [SerializeField] private float minMovementTimeBeforeStallCheck = 0.1f;
 
         private const string IdleStateName = "Idle";
         private const string WalkStateName = "Walk";
         private const string AttackStateName = "Attack";
-        private const string WindUpStateName = "WindUp"; // optional; falls back if missing
+        private const string SkillStatePrefix = "Skill_"; // Will try Skill_0..Skill_3
         private const int BaseLayerIndex = 0; // Avoid magic number for base layer
         private const float ImmediateTransitionDuration = 0f; // Instant blend to avoid visible slide before pose
+        private const string HitStateName = "GetHit";
+
+        // Animator Parameter Names (matching the screenshot)
+        private const string IdleParamName = "Idle";
+        private const string WalkParamName = "Walk";
+        private const string AttackParamName = "Attack";
+        private const string DeathParamName = "Death";
+        private const string GetHitParamName = "GetHit";
+        private const string ReturnHomeParamName = "Return Home";
+        private const string Skill0ParamName = "Skill_0";
+        private const string Skill1ParamName = "Skill_1";
+        private const string Skill2ParamName = "Skill_2";
+        private const string Skill3ParamName = "Skill_3";
+
+        // Smooth rotation constants
+        private const float DefaultYawRotationDurationSeconds = 0.25f; // Short but smooth rotation back to default
 
         private int _lastSampleFrame = -1;
+        private int _currentSkillIndex = -1; // -1 means unknown
+        private System.Threading.CancellationTokenSource _autoReturnCts;
+        private System.Threading.CancellationTokenSource _rotationCts;
+        private float _initialLocalYawDegrees;
+        private Unit _unit;
+        private UnitState _currentState = UnitState.Idle;
+        private Vector3 _lastWorldPosition;
+        private int _consecutiveStillFrames;
+        private bool _forcedWalkFromMotion;
+        private float _movementStartTime;
 
         private void Awake()
         {
@@ -24,36 +72,295 @@ namespace ManaGambit
                 animator = GetComponentInChildren<Animator>();
             if (animator == null)
                 Debug.LogError("UnitAnimator: No animator found on " + gameObject.name);
+            _unit = GetComponent<Unit>();
+            _lastWorldPosition = transform.position;
+        }
+
+        private void Start()
+        {
+            // Capture the initial local yaw as the default facing to restore after moves
+            _initialLocalYawDegrees = transform.localEulerAngles.y;
+            if (_unit != null && restoreDefaultYawAfterMove)
+            {
+                _unit.OnMoveCompleted += HandleUnitMoveCompleted;
+                _unit.OnMoveStarted += HandleUnitMoveStarted;
+            }
         }
 
         public void SetState(UnitState state)
         {
+            _currentState = state;
             if (animator == null)
             {
                 Debug.LogWarning($"UnitAnimator: Animator missing on {gameObject.name}. Cannot set state {state}.");
                 return;
             }
 
+            // Route to appropriate implementation based on control mode
+            if (controlMode == AnimationControlMode.ParameterStateControl)
+            {
+                SetStateUsingParameters(state);
+            }
+            else
+            {
+                SetStateUsingDirectControl(state);
+            }
+            
+            Debug.Log($"{name} UnitAnimator SetState {state} (Mode: {controlMode})");
+        }
+
+        private void SetStateUsingDirectControl(UnitState state)
+        {
             switch (state)
             {
                 case UnitState.Idle:
-                    TryPlayState(IdleStateName);
-                    break;
-                case UnitState.Moving:
-                    TryPlayState(WalkStateName);
-                    break;
-                case UnitState.WindUp:
-                    if (!TryPlayState(WindUpStateName))
+                    // If transitioning from Moving to Idle, use a short crossfade for smooth stop
+                    if (_currentState == UnitState.Moving)
                     {
-                        // If no dedicated wind-up state, optionally hold Idle/Walk
+                        CrossfadeToIdle(moveStopIdleCrossfadeSeconds);
+                    }
+                    else
+                    {
                         TryPlayState(IdleStateName);
                     }
+                    CancelAutoReturn();
+                    // Reset motion tracking when entering Idle
+                    _forcedWalkFromMotion = false;
+                    _consecutiveStillFrames = 0;
+                    break;
+                case UnitState.Moving:
+                    // For walk, avoid crossfade to prevent late visual start; play immediately from time 0
+                    TryPlayStateImmediate(WalkStateName);
+                    CancelAutoReturn();
+                    // Reset motion tracking so we don't mis-read the first frame after entering Moving
+                    _lastWorldPosition = transform.position;
+                    _consecutiveStillFrames = 0;
+                    _forcedWalkFromMotion = true;
+                    _movementStartTime = Time.time;
+                    break;
+                case UnitState.WindUp:
+                    // WindUp is no longer used - fall back to Idle
+                    TryPlayState(IdleStateName);
+                    CancelAutoReturn();
                     break;
                 case UnitState.Attacking:
-                    TryPlayState(AttackStateName);
+                    // Deprecated generic Attack state: only play skill-specific clips; fallback to Idle if missing
+                    if (!TryPlaySkillState())
+                    {
+                        TryPlayState(IdleStateName);
+                    }
+                    // In play mode, automatically return to Idle after current clip completes
+                    if (Application.isPlaying && autoReturnToIdleAfterSkills)
+                    {
+                        StartAutoReturnToIdleAfterCurrentClip().Forget();
+                    }
                     break;
             }
-            Debug.Log($"{name} UnitAnimator SetState {state}");
+        }
+
+        private void SetStateUsingParameters(UnitState state)
+        {
+            switch (state)
+            {
+                case UnitState.Idle:
+                    SetIdleParametersActive();
+                    CancelAutoReturn();
+                    // Reset motion tracking when entering Idle
+                    _forcedWalkFromMotion = false;
+                    _consecutiveStillFrames = 0;
+                    break;
+                case UnitState.Moving:
+                    SetWalkParametersActive();
+                    CancelAutoReturn();
+                    // Reset motion tracking so we don't mis-read the first frame after entering Moving
+                    _lastWorldPosition = transform.position;
+                    _consecutiveStillFrames = 0;
+                    _forcedWalkFromMotion = true;
+                    _movementStartTime = Time.time;
+                    break;
+                case UnitState.WindUp:
+                    // WindUp is no longer used - fall back to Idle
+                    SetIdleParametersActive();
+                    CancelAutoReturn();
+                    break;
+                case UnitState.Attacking:
+                    // Trigger skill-specific parameter if available
+                    if (!TriggerSkillParameter())
+                    {
+                        TriggerParameter(AttackParamName);
+                    }
+                    // In play mode, automatically return to Idle after current clip completes
+                    if (Application.isPlaying && autoReturnToIdleAfterSkills)
+                    {
+                        StartAutoReturnToIdleAfterCurrentClip().Forget();
+                    }
+                    break;
+            }
+        }
+
+        private void Update()
+        {
+            if (!Application.isPlaying) return;
+            if (animator == null) return;
+
+            // Only gate Walk while in Moving state; allow Attacking/WindUp/Idle as-is
+            if (_currentState != UnitState.Moving) { _lastWorldPosition = transform.position; return; }
+
+            // Measure planar displacement (ignore Y)
+            var current = transform.position;
+            var delta = new Vector3(current.x - _lastWorldPosition.x, 0f, current.z - _lastWorldPosition.z);
+            float minDelta = Mathf.Max(0f, minVisiblePlanarDelta);
+            bool isMovingPlanar = delta.sqrMagnitude > (minDelta * minDelta);
+
+            if (isMovingPlanar)
+            {
+                _consecutiveStillFrames = 0;
+                // Ensure Walk is playing if not already - use appropriate mode
+                if (controlMode == AnimationControlMode.ParameterStateControl)
+                {
+                    // For parameter mode, just ensure Walk parameter is active
+                    if (!GetBoolParameter(WalkParamName))
+                    {
+                        SetWalkParametersActive();
+                        _forcedWalkFromMotion = true;
+                    }
+                }
+                else
+                {
+                    // Direct state control mode
+                    var info = animator.GetCurrentAnimatorStateInfo(BaseLayerIndex);
+                    int walkHash = Animator.StringToHash(WalkStateName);
+                    int walkFullPathHash = Animator.StringToHash($"Base Layer.{WalkStateName}");
+                    bool alreadyWalking = (info.shortNameHash == walkHash) || (info.fullPathHash == walkFullPathHash);
+                    if (!alreadyWalking)
+                    {
+                        TryPlayStateImmediate(WalkStateName);
+                        _forcedWalkFromMotion = true;
+                    }
+                }
+            }
+            else
+            {
+                _consecutiveStillFrames = Mathf.Max(0, _consecutiveStillFrames + 1);
+                int required = Mathf.Max(1, stalledFramesBeforeIdle);
+                float timeSinceMovementStart = Time.time - _movementStartTime;
+                if (_forcedWalkFromMotion && _consecutiveStillFrames >= required && timeSinceMovementStart >= minMovementTimeBeforeStallCheck)
+                {
+                    // Short transition to Idle mid-move if we stopped moving visibly
+                    if (controlMode == AnimationControlMode.ParameterStateControl)
+                    {
+                        SetIdleParametersActive();
+                    }
+                    else
+                    {
+                        CrossfadeToIdle(moveStopIdleCrossfadeSeconds);
+                    }
+                    _forcedWalkFromMotion = false;
+                }
+            }
+
+            _lastWorldPosition = current;
+        }
+
+        // Parameter-based animation control methods
+        private void SetIdleParametersActive()
+        {
+            if (!HasParameter(IdleParamName) || !HasParameter(WalkParamName)) return;
+            
+            SetBoolParameter(IdleParamName, true);
+            SetBoolParameter(WalkParamName, false);
+            // Note: Death parameter is not managed here as it's for a different use case
+        }
+
+        private void SetWalkParametersActive()
+        {
+            if (!HasParameter(IdleParamName) || !HasParameter(WalkParamName)) return;
+            
+            SetBoolParameter(IdleParamName, false);
+            SetBoolParameter(WalkParamName, true);
+        }
+
+        private bool TriggerSkillParameter()
+        {
+            if (_currentSkillIndex < 0 || _currentSkillIndex > 3) return false;
+            
+            string paramName = _currentSkillIndex switch
+            {
+                0 => Skill0ParamName,
+                1 => Skill1ParamName,
+                2 => Skill2ParamName,
+                3 => Skill3ParamName,
+                _ => null
+            };
+            
+            if (paramName != null && HasParameter(paramName))
+            {
+                TriggerParameter(paramName);
+                return true;
+            }
+            return false;
+        }
+
+        private bool HasParameter(string paramName)
+        {
+            if (animator == null) return false;
+            foreach (AnimatorControllerParameter param in animator.parameters)
+            {
+                if (param.name == paramName) return true;
+            }
+            return false;
+        }
+
+        private void SetBoolParameter(string paramName, bool value)
+        {
+            if (animator == null || !HasParameter(paramName)) return;
+            try
+            {
+                animator.SetBool(paramName, value);
+                // Force immediate sampling in parameter mode to match direct mode behavior
+                if (controlMode == AnimationControlMode.ParameterStateControl && _lastSampleFrame != Time.frameCount)
+                {
+                    animator.Update(0f);
+                    _lastSampleFrame = Time.frameCount;
+                }
+            }
+            catch (System.Exception e)
+            {
+                Debug.LogWarning($"UnitAnimator: Failed to set bool parameter '{paramName}' to {value}: {e.Message}");
+            }
+        }
+
+        private bool GetBoolParameter(string paramName)
+        {
+            if (animator == null || !HasParameter(paramName)) return false;
+            try
+            {
+                return animator.GetBool(paramName);
+            }
+            catch (System.Exception e)
+            {
+                Debug.LogWarning($"UnitAnimator: Failed to get bool parameter '{paramName}': {e.Message}");
+                return false;
+            }
+        }
+
+        private void TriggerParameter(string paramName)
+        {
+            if (animator == null || !HasParameter(paramName)) return;
+            try
+            {
+                animator.SetTrigger(paramName);
+                // Force immediate sampling in parameter mode to match direct mode behavior
+                if (controlMode == AnimationControlMode.ParameterStateControl && _lastSampleFrame != Time.frameCount)
+                {
+                    animator.Update(0f);
+                    _lastSampleFrame = Time.frameCount;
+                }
+            }
+            catch (System.Exception e)
+            {
+                Debug.LogWarning($"UnitAnimator: Failed to trigger parameter '{paramName}': {e.Message}");
+            }
         }
 
         private bool TryPlayState(string stateName)
@@ -67,6 +374,20 @@ namespace ManaGambit
 
             if (hasByName || hasByFullPath)
             {
+                // If already in this state, restart from time 0 so repeated casts replay
+                var info = animator.GetCurrentAnimatorStateInfo(BaseLayerIndex);
+                bool alreadyInState = (info.shortNameHash == stateHash) || (info.fullPathHash == fullPathHash);
+                if (alreadyInState)
+                {
+                    int hashToPlay = hasByName ? stateHash : fullPathHash;
+                    animator.Play(hashToPlay, BaseLayerIndex, 0f);
+                    if (_lastSampleFrame != Time.frameCount)
+                    {
+                        animator.Update(0f);
+                        _lastSampleFrame = Time.frameCount;
+                    }
+                    return true;
+                }
                 // Choose the hash that actually exists - prefer name hash, fallback to full path hash
                 int hashToUse = hasByName ? stateHash : fullPathHash;
                 
@@ -83,6 +404,401 @@ namespace ManaGambit
 
             Debug.LogWarning($"UnitAnimator: Animation state '{stateName}' not found on {gameObject.name}. Skipping play.");
             return false;
+        }
+
+        private bool TryPlayStateImmediate(string stateName)
+        {
+            int stateHash = Animator.StringToHash(stateName);
+            int fullPathHash = Animator.StringToHash($"Base Layer.{stateName}");
+            bool hasByName = animator.HasState(BaseLayerIndex, stateHash);
+            bool hasByFullPath = animator.HasState(BaseLayerIndex, fullPathHash);
+            if (!(hasByName || hasByFullPath))
+            {
+                Debug.LogWarning($"UnitAnimator: Animation state '{stateName}' not found on {gameObject.name}. Skipping play.");
+                return false;
+            }
+            int hashToUse = hasByName ? stateHash : fullPathHash;
+            animator.Play(hashToUse, BaseLayerIndex, 0f);
+            if (_lastSampleFrame != Time.frameCount)
+            {
+                animator.Update(0f);
+                _lastSampleFrame = Time.frameCount;
+            }
+            return true;
+        }
+
+        private bool TryPlaySkillState()
+        {
+            if (_currentSkillIndex < 0 || _currentSkillIndex > 3)
+            {
+                return false;
+            }
+            string candidate = SkillStatePrefix + _currentSkillIndex.ToString();
+            return TryPlayState(candidate);
+        }
+
+        public bool PlayReturnHomeState(int skillIndex)
+        {
+            if (animator == null) return false;
+            
+            if (controlMode == AnimationControlMode.ParameterStateControl)
+            {
+                // In parameter mode, trigger the Return Home parameter
+                if (HasParameter(ReturnHomeParamName))
+                {
+                    TriggerParameter(ReturnHomeParamName);
+                    return true;
+                }
+                // Fall back to Idle if no Return Home parameter
+                SetIdleParametersActive();
+                return true;
+            }
+            else
+            {
+                // Direct state control mode
+                int clamped = Mathf.Clamp(skillIndex, 0, 3);
+                string specific = $"{SkillStatePrefix}{clamped}_ReturnHome";
+                // Prefer skill-specific return-home if present; otherwise fall back to a generic "ReturnHome" state
+                if (TryPlayState(specific)) return true;
+                if (TryPlayState("ReturnHome")) return true;
+                // As a last resort, fall back to Idle only (generic Attack is deprecated)
+                return TryPlayState(IdleStateName);
+            }
+        }
+
+        public void CrossfadeToIdle(float transitionSeconds)
+        {
+            if (animator == null) return;
+            
+            if (controlMode == AnimationControlMode.ParameterStateControl)
+            {
+                // In parameter mode, just set Idle parameters active
+                // Note: Parameter-based state machines handle their own transitions
+                SetIdleParametersActive();
+            }
+            else
+            {
+                // Direct state control mode - use crossfade
+                float dur = Mathf.Max(0f, transitionSeconds);
+                int stateHash = Animator.StringToHash(IdleStateName);
+                int fullPathHash = Animator.StringToHash($"Base Layer.{IdleStateName}");
+                bool hasByName = animator.HasState(BaseLayerIndex, stateHash);
+                bool hasByFullPath = animator.HasState(BaseLayerIndex, fullPathHash);
+                if (hasByName || hasByFullPath)
+                {
+                    int hashToUse = hasByName ? stateHash : fullPathHash;
+                    animator.CrossFadeInFixedTime(hashToUse, dur, BaseLayerIndex, 0f);
+                }
+                else
+                {
+                    // Fallback to immediate Idle
+                    TryPlayState(IdleStateName);
+                }
+
+                // Ensure we sample at least once this frame so the transition begins visually
+                if (_lastSampleFrame != Time.frameCount)
+                {
+                    animator.Update(0f);
+                    _lastSampleFrame = Time.frameCount;
+                }
+            }
+        }
+
+        public void SetSkillIndex(int index)
+        {
+            _currentSkillIndex = Mathf.Clamp(index, -1, 3);
+        }
+
+        public void ClearSkillIndex()
+        {
+            _currentSkillIndex = -1;
+        }
+
+        public void PlaySkillShotNow(int skillIndex)
+        {
+            if (animator == null) return;
+            SetSkillIndex(skillIndex);
+            
+            if (controlMode == AnimationControlMode.ParameterStateControl)
+            {
+                // In parameter mode, trigger the appropriate skill parameter
+                if (!TriggerSkillParameter())
+                {
+                    TriggerParameter(AttackParamName);
+                }
+            }
+            else
+            {
+                // Direct state control mode
+                if (!TryPlaySkillState())
+                {
+                    TryPlayState(AttackStateName);
+                }
+            }
+            
+            if (Application.isPlaying && autoReturnToIdleAfterSkills)
+            {
+                StartAutoReturnToIdleAfterCurrentClip().Forget();
+            }
+        }
+
+        public void PlayGetHit()
+        {
+            if (animator == null) return;
+            
+            if (controlMode == AnimationControlMode.ParameterStateControl)
+            {
+                // In parameter mode, trigger the GetHit parameter
+                if (HasParameter(GetHitParamName))
+                {
+                    TriggerParameter(GetHitParamName);
+                }
+                else
+                {
+                    return;
+                }
+            }
+            else
+            {
+                // Direct state control mode
+                if (!TryPlayStateImmediate(HitStateName))
+                {
+                    return;
+                }
+            }
+            
+            if (Application.isPlaying && autoReturnToIdleAfterSkills)
+            {
+                StartAutoReturnToIdleAfterCurrentClip().Forget();
+            }
+        }
+
+        public void PlayDeath()
+        {
+            if (animator == null) return;
+            
+            if (controlMode == AnimationControlMode.ParameterStateControl)
+            {
+                // In parameter mode, set the Death parameter
+                if (HasParameter(DeathParamName))
+                {
+                    SetBoolParameter(DeathParamName, true);
+                    // Also clear other movement parameters
+                    SetBoolParameter(IdleParamName, false);
+                    SetBoolParameter(WalkParamName, false);
+                }
+                else
+                {
+                    Debug.LogWarning($"UnitAnimator: Death parameter '{DeathParamName}' not found on {gameObject.name}.");
+                    return;
+                }
+            }
+            else
+            {
+                // Direct state control mode - try to play Death state
+                if (!TryPlayStateImmediate("Death"))
+                {
+                    Debug.LogWarning($"UnitAnimator: Death state not found on {gameObject.name}.");
+                    return;
+                }
+            }
+            
+            // Cancel any auto-return as death is typically a final state
+            CancelAutoReturn();
+        }
+
+        public void ResetFromDeath()
+        {
+            if (animator == null) return;
+            
+            if (controlMode == AnimationControlMode.ParameterStateControl)
+            {
+                // In parameter mode, clear the Death parameter and return to Idle
+                if (HasParameter(DeathParamName))
+                {
+                    SetBoolParameter(DeathParamName, false);
+                    SetIdleParametersActive();
+                }
+                else
+                {
+                    SetIdleParametersActive(); // Fallback to Idle
+                }
+            }
+            else
+            {
+                // Direct state control mode - return to Idle
+                TryPlayState(IdleStateName);
+            }
+        }
+
+        // Editor-only helper to advance animations when testing outside Play Mode
+        public void EditorTick(float deltaSeconds)
+        {
+            if (animator == null) return;
+            if (deltaSeconds <= 0f) return;
+            animator.Update(deltaSeconds);
+        }
+
+        public float GetCurrentStateLengthSeconds()
+        {
+            if (animator == null) return 0f;
+            var info = animator.GetCurrentAnimatorStateInfo(BaseLayerIndex);
+            return info.length;
+        }
+
+        public float GetRemainingTimeSecondsForCurrentStateOneShot()
+        {
+            if (animator == null) return 0f;
+            var info = animator.GetCurrentAnimatorStateInfo(BaseLayerIndex);
+            float len = info.length;
+            float normalized = info.normalizedTime;
+            
+            // In parameter mode, the state machine might have different transition timing
+            // Add a safety check to ensure we have valid timing info
+            if (len <= 0f)
+            {
+                Debug.LogWarning($"UnitAnimator: Invalid animation length ({len}s) detected on {gameObject.name}. Using fallback timing.");
+                return 1f; // Fallback timing
+            }
+            
+            float progress = Mathf.Min(normalized, 1f);
+            return Mathf.Max(0f, len * (1f - progress));
+        }
+
+        private void CancelAutoReturn()
+        {
+            try { _autoReturnCts?.Cancel(); _autoReturnCts?.Dispose(); } catch { }
+            _autoReturnCts = null;
+        }
+
+        private async UniTaskVoid StartAutoReturnToIdleAfterCurrentClip()
+        {
+            CancelAutoReturn();
+            _autoReturnCts = new System.Threading.CancellationTokenSource();
+            var linked = System.Threading.CancellationTokenSource.CreateLinkedTokenSource(this.GetCancellationTokenOnDestroy(), _autoReturnCts.Token);
+            int delayMs;
+            try
+            {
+                float remaining = GetRemainingTimeSecondsForCurrentStateOneShot();
+                delayMs = Mathf.Max(1, Mathf.RoundToInt(remaining * 1000f) + AutoReturnPaddingMs);
+            }
+            catch { delayMs = 200; }
+            try { await UniTask.Delay(delayMs, cancellationToken: linked.Token); }
+            catch { }
+            if (animator != null)
+            {
+                CrossfadeToIdle(autoReturnIdleCrossfadeSeconds);
+                ClearSkillIndex();
+            }
+        }
+
+        private void OnDisable()
+        {
+            CancelAutoReturn();
+            
+            // Cancel and cleanup rotation
+            if (_rotationCts != null)
+            {
+                _rotationCts.Cancel();
+                _rotationCts.Dispose();
+                _rotationCts = null;
+            }
+            
+            if (_unit != null && restoreDefaultYawAfterMove)
+            {
+                _unit.OnMoveCompleted -= HandleUnitMoveCompleted;
+                _unit.OnMoveStarted -= HandleUnitMoveStarted;
+            }
+        }
+
+        private async UniTaskVoid RotateToDefaultYawSmooth()
+        {
+            // Cancel any existing rotation
+            if (_rotationCts != null)
+            {
+                _rotationCts.Cancel();
+                _rotationCts.Dispose();
+                _rotationCts = null;
+            }
+
+            _rotationCts = new System.Threading.CancellationTokenSource();
+            var linkedToken = System.Threading.CancellationTokenSource.CreateLinkedTokenSource(
+                this.GetCancellationTokenOnDestroy(), 
+                _rotationCts.Token).Token;
+
+            try
+            {
+                var startEuler = transform.localEulerAngles;
+                var targetEuler = startEuler;
+                targetEuler.y = _initialLocalYawDegrees;
+
+                // Check if rotation is needed (avoid rotating if already close to target)
+                float angleDiff = Mathf.DeltaAngle(startEuler.y, _initialLocalYawDegrees);
+                if (Mathf.Abs(angleDiff) < 1f) // Less than 1 degree difference
+                {
+                    return;
+                }
+
+                float elapsed = 0f;
+                while (elapsed < DefaultYawRotationDurationSeconds)
+                {
+                    if (linkedToken.IsCancellationRequested)
+                        return;
+
+                    elapsed += Time.deltaTime;
+                    float t = Mathf.Clamp01(elapsed / DefaultYawRotationDurationSeconds);
+                    
+                    // Use smooth easing for more natural rotation
+                    t = t * t * (3f - 2f * t); // Smoothstep
+
+                    var currentEuler = transform.localEulerAngles;
+                    currentEuler.y = Mathf.LerpAngle(startEuler.y, _initialLocalYawDegrees, t);
+                    transform.localEulerAngles = currentEuler;
+
+                    await UniTask.Yield(PlayerLoopTiming.Update, cancellationToken: linkedToken);
+                }
+
+                // Ensure exact final rotation
+                var finalEuler = transform.localEulerAngles;
+                finalEuler.y = _initialLocalYawDegrees;
+                transform.localEulerAngles = finalEuler;
+            }
+            catch (System.OperationCanceledException)
+            {
+                // Rotation was cancelled, which is fine
+            }
+            finally
+            {
+                if (_rotationCts != null)
+                {
+                    _rotationCts.Dispose();
+                    _rotationCts = null;
+                }
+            }
+        }
+
+        private void HandleUnitMoveStarted(Unit u)
+        {
+            // Cancel any ongoing rotation back to default when a new move starts
+            if (_rotationCts != null)
+            {
+                _rotationCts.Cancel();
+                _rotationCts.Dispose();
+                _rotationCts = null;
+            }
+        }
+
+        private void HandleUnitMoveCompleted(Unit u)
+        {
+            // Start smooth rotation back to default facing
+            RotateToDefaultYawSmooth().Forget();
+
+            // Stop motion-driven animation checks since move is complete
+            _forcedWalkFromMotion = false;
+            _consecutiveStillFrames = 0;
+            
+            // Unit.cs already calls SetState(Idle) which handles the transition, 
+            // so we don't need to crossfade again here to avoid double transitions
         }
     }
 }

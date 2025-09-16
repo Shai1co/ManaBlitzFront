@@ -39,6 +39,10 @@ namespace ManaGambit
 		public int startTick;
 		public BoardData board;
 		public Dictionary<string, float> playerMana;
+		/// <summary>
+		/// Player names keyed by playerId. Optional field for future server support.
+		/// </summary>
+		public Dictionary<string, string> playerNames;
 	}
 
 	[Serializable]
@@ -58,6 +62,8 @@ namespace ManaGambit
 		public int startTick;
 		public int endTick;
 		public int currentPips; // optional; piggybacked for mover
+		public string intentId; // added for complete logging
+		public int serverTick; // added for complete logging
 	}
 
 	[Serializable]
@@ -80,6 +86,8 @@ namespace ManaGambit
 		public int endWindupTick;
 		public int hitTick;
 		public int currentPips; // optional; piggybacked for attacker
+		public string intentId; // added for complete logging
+		public int serverTick; // added for complete logging
 	}
 
 	[Serializable]
@@ -102,11 +110,20 @@ namespace ManaGambit
 	public class UseSkillResultTarget
 	{
 		public string unitId;
+		public int x; // target coordinates (added to match JS client)
+		public int y; // target coordinates (added to match JS client)
 		public int result;
 		public int damage;
 		public bool killed;
+		public bool crit; // critical hit flag (added to match JS client)
 		public int hp; // optional; server may include updated hp
 		public bool dead; // optional alias used by server
+	}
+
+	[Serializable]
+	public class ClientTarget
+	{
+		public Pos cell;
 	}
 
 	[Serializable]
@@ -115,7 +132,11 @@ namespace ManaGambit
 		public int skillId;
 		public string attacker;
 		public int hitTick;
+		public string intentId; // added to match JS client logging
+		public string damageType; // added to match JS client (e.g., "physical", "magic")
 		public UseSkillResultTarget[] targets;
+		public ClientTarget clientTarget; // added to match JS client
+		public int serverTick; // added to match JS client logging
 		public int currentPips; // optional; piggybacked for attacker
 	}
 
@@ -254,6 +275,10 @@ namespace ManaGambit
 		/// Mana per player keyed by playerId (not userId).
 		/// </summary>
 		public Dictionary<string, float> playerMana = new Dictionary<string, float>();
+		/// <summary>
+		/// Player names keyed by playerId. Optional field for future server support.
+		/// </summary>
+		public Dictionary<string, string> playerNames;
 		// NOTE: server currently sends 'countdown' as a string token instead of an object
 		// Using loose-typed field to accept both string and object tokens
 		public object countdown;
@@ -384,5 +409,21 @@ namespace ManaGambit
 		public string type;
 		public int serverTick;
 		public ManaUpdateData data;
+	}
+
+	[Serializable]
+	public class UnitDiedData
+	{
+		public string unitId;
+		public string killerId; // optional; the unit that caused the death
+		public int deathTick;
+	}
+
+	[Serializable]
+	public class UnitDiedEvent
+	{
+		public string type;
+		public int serverTick;
+		public UnitDiedData data;
 	}
 }
