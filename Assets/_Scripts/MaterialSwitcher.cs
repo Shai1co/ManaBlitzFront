@@ -7,6 +7,7 @@ public class MaterialSwitcher : MonoBehaviour
     [SerializeField] private Material mat2;
 
     private Renderer _renderer;
+    private int currentMaterialIndex = 0; // 0 for mat1, 1 for mat2
 
     private void Awake()
     {
@@ -21,10 +22,18 @@ public class MaterialSwitcher : MonoBehaviour
         switch (type)
         {
             case 0:
-                if (mat1 != null) _renderer.material = mat1;
+                if (mat1 != null) 
+                {
+                    _renderer.sharedMaterial = mat1;
+                    currentMaterialIndex = 0;
+                }
                 break;
             case 1:
-                if (mat2 != null) _renderer.material = mat2;
+                if (mat2 != null) 
+                {
+                    _renderer.sharedMaterial = mat2;
+                    currentMaterialIndex = 1;
+                }
                 break;
         }
     }
@@ -35,13 +44,15 @@ public class MaterialSwitcher : MonoBehaviour
         if (_renderer == null) Awake();
         if (_renderer == null) return;
 
-        if (_renderer.material == mat1 && mat2 != null)
+        if (currentMaterialIndex == 0 && mat2 != null)
         {
-            _renderer.material = mat2;
+            _renderer.sharedMaterial = mat2;
+            currentMaterialIndex = 1;
         }
-        else if (_renderer.material == mat2 && mat1 != null)
+        else if (currentMaterialIndex == 1 && mat1 != null)
         {
-            _renderer.material = mat1;
+            _renderer.sharedMaterial = mat1;
+            currentMaterialIndex = 0;
         }
     }
 

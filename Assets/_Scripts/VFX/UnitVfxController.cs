@@ -269,12 +269,7 @@ namespace ManaGambit
 				}
 				else
 				{
-					var ua2 = unit.GetComponent<UnitAnimator>();
-					if (ua2 != null)
-					{
-						ua2.CrossfadeToIdle(0.15f);
-						ua2.ClearSkillIndex();
-					}
+					TransitionToIdle();
 				}
 			}
 		}
@@ -309,11 +304,7 @@ namespace ManaGambit
 						ua.PlayReturnHomeState(Mathf.Max(0, skillIndex));
 					}
 					await unit.MoveTo(originalPos);
-					if (ua != null)
-					{
-						ua.CrossfadeToIdle(0.15f);
-						ua.ClearSkillIndex();
-					}
+					TransitionToIdle();
 					break;
 
 				case "landneartarget":
@@ -328,24 +319,24 @@ namespace ManaGambit
 						await unit.MoveTo(chosen.Value);
 					}
 					// After landing, return to idle
-					var ual = unit.GetComponent<UnitAnimator>();
-					if (ual != null)
-					{
-						ual.CrossfadeToIdle(0.15f);
-						ual.ClearSkillIndex();
-					}
+					TransitionToIdle();
 					break;
 				}
 
 				default:
 					// Default: ensure we return to idle
-					var uad = unit.GetComponent<UnitAnimator>();
-					if (uad != null)
-					{
-						uad.CrossfadeToIdle(0.15f);
-						uad.ClearSkillIndex();
-					}
+					TransitionToIdle();
 					break;
+			}
+		}
+
+		private void TransitionToIdle(float crossfadeDuration = 0.15f)
+		{
+			var unitAnimator = unit.GetComponent<UnitAnimator>();
+			if (unitAnimator != null)
+			{
+				unitAnimator.CrossfadeToIdle(crossfadeDuration);
+				unitAnimator.ClearSkillIndex();
 			}
 		}
 

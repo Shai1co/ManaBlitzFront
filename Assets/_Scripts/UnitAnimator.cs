@@ -89,7 +89,9 @@ namespace ManaGambit
 
         public void SetState(UnitState state)
         {
-            _currentState = state;
+            // Store the previous state before changing _currentState
+            var prevState = _currentState;
+            
             if (animator == null)
             {
                 Debug.LogWarning($"UnitAnimator: Animator missing on {gameObject.name}. Cannot set state {state}.");
@@ -99,23 +101,25 @@ namespace ManaGambit
             // Route to appropriate implementation based on control mode
             if (controlMode == AnimationControlMode.ParameterStateControl)
             {
-                SetStateUsingParameters(state);
+                SetStateUsingParameters(state, prevState);
             }
             else
             {
-                SetStateUsingDirectControl(state);
+                SetStateUsingDirectControl(state, prevState);
             }
             
-            Debug.Log($"{name} UnitAnimator SetState {state} (Mode: {controlMode})");
+            // Only assign the new state after transitions complete
+            _currentState = state;
+            Debug.Log($"{name} UnitAnimator SetState {prevState} -> {state} (Mode: {controlMode})");
         }
 
-        private void SetStateUsingDirectControl(UnitState state)
+        private void SetStateUsingDirectControl(UnitState state, UnitState prevState)
         {
             switch (state)
             {
                 case UnitState.Idle:
                     // If transitioning from Moving to Idle, use a short crossfade for smooth stop
-                    if (_currentState == UnitState.Moving)
+                    if (prevState == UnitState.Moving)
                     {
                         CrossfadeToIdle(moveStopIdleCrossfadeSeconds);
                     }
@@ -158,7 +162,7 @@ namespace ManaGambit
             }
         }
 
-        private void SetStateUsingParameters(UnitState state)
+        private void SetStateUsingParameters(UnitState state, UnitState prevState)
         {
             switch (state)
             {

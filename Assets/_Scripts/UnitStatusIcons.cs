@@ -106,9 +106,8 @@ namespace ManaGambit
 			{
 				var s = sliders[i]; if (s == null) continue;
 				var n = s.gameObject.name.ToLowerInvariant();
-				if (greenHpSlider == null && (n.Contains("green", System.StringComparison.OrdinalIgnoreCase) || n.Contains("ally", System.StringComparison.OrdinalIgnoreCase) || n.Contains("own", System.StringComparison.OrdinalIgnoreCase))) { greenHpSlider = s; continue; }
-				if (redHpSlider == null && (n.Contains("red", System.StringComparison.OrdinalIgnoreCase) || n.Contains("enemy", System.StringComparison.OrdinalIgnoreCase) || n.Contains("foe", System.StringComparison.OrdinalIgnoreCase))) { redHpSlider = s; continue; }
-			}
+				if (greenHpSlider == null && (n.Contains("green") || n.Contains("ally") || n.Contains("own"))) { greenHpSlider = s; continue; }
+				if (redHpSlider == null && (n.Contains("red") || n.Contains("enemy") || n.Contains("foe"))) { redHpSlider = s; continue; }			}
 			// Fallback: first two sliders by order
 			if (greenHpSlider == null && sliders.Length > 0) greenHpSlider = sliders[0];
 			if (redHpSlider == null && sliders.Length > 1) redHpSlider = sliders[1];
@@ -242,7 +241,51 @@ namespace ManaGambit
 
 			// Prefer TMP UGUI; fallback to 3D TMP
 			var tmpUgui = go.GetComponentInChildren<TextMeshProUGUI>(true);
-			if (tmpUgui == null && container != null) tmpUgui = container.GetComponentInChildren<TextMeshProUGUI>(true);
+			if (tmpUgui == null)
+			{
+				// No text component on icon - create a unique one
+				TextMeshProUGUI templateUgui = null;
+				if (container != null) templateUgui = container.GetComponentInChildren<TextMeshProUGUI>(true);
+				
+				if (templateUgui != null)
+				{
+					// Clone the template text component to create a unique instance
+					var newTextGo = new GameObject("TextMeshPro UGUI");
+					newTextGo.transform.SetParent(go.transform, false);
+					tmpUgui = newTextGo.AddComponent<TextMeshProUGUI>();
+					
+					// Copy settings from template
+					tmpUgui.font = templateUgui.font;
+					tmpUgui.fontSize = templateUgui.fontSize;
+					tmpUgui.color = templateUgui.color;
+					tmpUgui.alignment = templateUgui.alignment;
+					tmpUgui.fontStyle = templateUgui.fontStyle;
+					tmpUgui.textWrappingMode = templateUgui.textWrappingMode;
+					
+					// Copy RectTransform settings if available
+					if (templateUgui.rectTransform != null && tmpUgui.rectTransform != null)
+					{
+						var templateRect = templateUgui.rectTransform;
+						var newRect = tmpUgui.rectTransform;
+						newRect.anchorMin = templateRect.anchorMin;
+						newRect.anchorMax = templateRect.anchorMax;
+						newRect.anchoredPosition = templateRect.anchoredPosition;
+						newRect.sizeDelta = templateRect.sizeDelta;
+						newRect.localScale = templateRect.localScale;
+					}
+				}
+				else
+				{
+					// No template found - create a basic text component
+					var newTextGo = new GameObject("TextMeshPro UGUI");
+					newTextGo.transform.SetParent(go.transform, false);
+					tmpUgui = newTextGo.AddComponent<TextMeshProUGUI>();
+					tmpUgui.fontSize = 14f;
+					tmpUgui.color = Color.white;
+					tmpUgui.alignment = TextAlignmentOptions.Center;
+				}
+			}
+			
 			if (tmpUgui != null)
 			{
 				tmpUgui.text = label;
@@ -250,8 +293,51 @@ namespace ManaGambit
 				tmpUgui.gameObject.SetActive(true);
 				return;
 			}
+			
 			var tmp = go.GetComponentInChildren<TextMeshPro>(true);
-			if (tmp == null && container != null) tmp = container.GetComponentInChildren<TextMeshPro>(true);
+			if (tmp == null)
+			{
+				// No text component on icon - create a unique one
+				TextMeshPro templateTmp = null;
+				if (container != null) templateTmp = container.GetComponentInChildren<TextMeshPro>(true);
+				
+				if (templateTmp != null)
+				{
+					// Clone the template text component to create a unique instance
+					var newTextGo = new GameObject("TextMeshPro");
+					newTextGo.transform.SetParent(go.transform, false);
+					tmp = newTextGo.AddComponent<TextMeshPro>();
+					
+					// Copy settings from template
+					tmp.font = templateTmp.font;
+					tmp.fontSize = templateTmp.fontSize;
+					tmp.color = templateTmp.color;
+					tmp.alignment = templateTmp.alignment;
+					tmp.fontStyle = templateTmp.fontStyle;
+					tmp.textWrappingMode = templateTmp.textWrappingMode;
+					
+					// Copy transform settings
+					if (templateTmp.transform != null)
+					{
+						var templateTransform = templateTmp.transform;
+						var newTransform = tmp.transform;
+						newTransform.localPosition = templateTransform.localPosition;
+						newTransform.localRotation = templateTransform.localRotation;
+						newTransform.localScale = templateTransform.localScale;
+					}
+				}
+				else
+				{
+					// No template found - create a basic text component
+					var newTextGo = new GameObject("TextMeshPro");
+					newTextGo.transform.SetParent(go.transform, false);
+					tmp = newTextGo.AddComponent<TextMeshPro>();
+					tmp.fontSize = 2f;
+					tmp.color = Color.white;
+					tmp.alignment = TextAlignmentOptions.Center;
+				}
+			}
+			
 			if (tmp != null)
 			{
 				tmp.text = label;
@@ -260,7 +346,7 @@ namespace ManaGambit
 			}
 			else
 			{
-				Debug.LogWarning($"[UnitStatusIcons] No TextMeshPro found for label '{label}' on template {iconTemplate?.name}");
+				Debug.LogWarning($"[UnitStatusIcons] Failed to create TextMeshPro component for label '{label}' on template {iconTemplate?.name}");
 			}
 		}
 
