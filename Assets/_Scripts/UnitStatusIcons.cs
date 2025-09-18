@@ -7,25 +7,6 @@ namespace ManaGambit
 {
 	public class UnitStatusIcons : MonoBehaviour
 	{
-		private sealed class BillboardLimited : MonoBehaviour
-		{
-			private void LateUpdate()
-			{
-				var cam = Camera.main;
-				if (cam == null) return;
-				
-				// Get world positions
-				Vector3 worldPos = transform.position;
-				Vector3 cameraPos = cam.transform.position;
-				
-				// Calculate full direction from billboard to camera (including Y component for full billboarding)
-				Vector3 directionToCamera = (cameraPos - worldPos).normalized;
-				
-				// Make the transform look at the camera position
-				transform.LookAt(cameraPos);
-			}
-		}
-
 		[System.Serializable]
 		public class SpriteMapping
 		{
@@ -73,16 +54,6 @@ namespace ManaGambit
 				if (container == null) container = transform;
 			}
 			
-			// Add billboard behavior to the container instead of individual icons
-			if (container != null)
-			{
-				var billboard = container.GetComponent<BillboardLimited>();
-				if (billboard == null) 
-				{
-					billboard = container.gameObject.AddComponent<BillboardLimited>();
-				}
-			}
-			
 			AutoWireHpSlidersIfNeeded();
 			if (sprites != null)
 			{
@@ -107,7 +78,8 @@ namespace ManaGambit
 				var s = sliders[i]; if (s == null) continue;
 				var n = s.gameObject.name.ToLowerInvariant();
 				if (greenHpSlider == null && (n.Contains("green") || n.Contains("ally") || n.Contains("own"))) { greenHpSlider = s; continue; }
-				if (redHpSlider == null && (n.Contains("red") || n.Contains("enemy") || n.Contains("foe"))) { redHpSlider = s; continue; }			}
+				if (redHpSlider == null && (n.Contains("red") || n.Contains("enemy") || n.Contains("foe"))) { redHpSlider = s; continue; }
+			}
 			// Fallback: first two sliders by order
 			if (greenHpSlider == null && sliders.Length > 0) greenHpSlider = sliders[0];
 			if (redHpSlider == null && sliders.Length > 1) redHpSlider = sliders[1];

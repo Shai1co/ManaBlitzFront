@@ -23,6 +23,11 @@ namespace ManaGambit
 		public int hp;
 		public int maxHp;
 		public float mana;
+		/// <summary>
+		/// Animation state from server: "Idle", "Moving", "Attacking", "WindUp"
+		/// If null/empty, defaults to "Idle"
+		/// </summary>
+		public string animState;
 	}
 
 	[Serializable]
@@ -64,6 +69,19 @@ namespace ManaGambit
 		public int currentPips; // optional; piggybacked for mover
 		public string intentId; // added for complete logging
 		public int serverTick; // added for complete logging
+		/// <summary>
+		/// Animation state during/after movement: "Idle", "Moving", "Attacking", "WindUp"
+		/// If null/empty, defaults based on movement context
+		/// </summary>
+		public string animState;
+		/// <summary>
+		/// Movement reason: "Approach", "PostImpact", "Swap", or null for regular moves
+		/// </summary>
+		public string reason;
+		/// <summary>
+		/// Movement style: "Teleport" for instant movement, or null for normal movement
+		/// </summary>
+		public string moveStyle;
 	}
 
 	[Serializable]

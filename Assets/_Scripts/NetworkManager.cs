@@ -20,9 +20,10 @@ namespace ManaGambit
 		private const float ReconnectInitialDelaySeconds = (15f * DefaultTickRateMs) / 1000f; // 15 ticks
 		private const float ReconnectMaxDelaySeconds = (240f * DefaultTickRateMs) / 1000f; // 240 ticks
 		private const int ReconnectMaxAttempts = 3;
-		private const int ReconnectingFalse = 0; // for atomic gate
-		private const int ReconnectingTrue = 1;  // for atomic gate
-		public static NetworkManager Instance { get; private set; }
+	private const int ReconnectingFalse = 0; // for atomic gate
+	private const int ReconnectingTrue = 1;  // for atomic gate
+	private const long HttpNotModifiedCode = 304;
+	public static NetworkManager Instance { get; private set; }
 
 		public const float DefaultTickRateMs = 33.333f; // Centralized server tick rate
 
@@ -191,8 +192,8 @@ namespace ManaGambit
 				Debug.LogError($"{LogTag} Fetch config failed: {request.error} (HTTP {(long)request.responseCode})");
 				return false;
 			}
-			// Handle 304 Not Modified
-			if ((long)request.responseCode == 304)
+		// Handle 304 Not Modified
+		if ((long)request.responseCode == HttpNotModifiedCode)
 			{
 				Debug.Log($"{LogTag} Config not modified (ETag match). Using cached config.");
 				return !string.IsNullOrEmpty(lastConfigJson);
@@ -379,7 +380,9 @@ namespace ManaGambit
 			{
 				Debug.Log($"{LogTag} RequestValidTargets unitId={unitId} name={name} skillId={skillId}");
 			}
+#pragma warning disable CS4014 // Fire-and-forget send operation
 			room.Send("RequestValidTargets", req);
+#pragma warning restore CS4014
 		}
 
 		public UniTask SendIntent<TPayload>(IntentEnvelope<TPayload> envelope)
@@ -387,7 +390,7 @@ namespace ManaGambit
 			if (room == null || !isRoomOpen)
 			{
 				Debug.LogWarning($"{LogTag} Cannot send intent; room is {(room==null ? "null" : "closed")}. Attempting reconnect...");
-				TryAutoReconnect().Forget();
+				_ = TryAutoReconnect();
 				return UniTask.CompletedTask;
 			}
 			try
@@ -398,7 +401,9 @@ namespace ManaGambit
 					try { payloadJson = JsonUtility.ToJson(envelope.payload); } catch { }
 					Debug.Log($"{LogTag} SendIntent name={envelope.name} iid={envelope.intentId} matchId={envelope.matchId} userId={envelope.userId} payload={payloadJson}");
 				}
+#pragma warning disable CS4014 // Fire-and-forget send operation
 				room.Send(IntentChannel, envelope);
+#pragma warning restore CS4014
 			}
 			catch (Exception ex)
 			{
@@ -409,17 +414,17 @@ namespace ManaGambit
 
 		private void OnDisable()
 		{
-			CleanupAsync().Forget();
+			_ = CleanupAsync();
 		}
 
 		private void OnDestroy()
 		{
-			CleanupAsync().Forget();
+			_ = CleanupAsync();
 		}
 
 		private void OnApplicationQuit()
 		{
-			CleanupAsync().Forget();
+			_ = CleanupAsync();
 		}
 
 		private async UniTask CleanupAsync()
@@ -491,8 +496,17 @@ namespace ManaGambit
 			// Only do full reset for initial setup or when explicitly requested
 			if (forceFullReset)
 			{
-				foreach (var unit in GameManager.Instance.GetAllUnits())
+				// Before destroying units, trigger death events for any that might be selected
+				// This ensures ClickInput clears its selection state properly
+				var allUnits = GameManager.Instance.GetAllUnits();
+				foreach (var unit in allUnits)
 				{
+					if (unit != null && !unit.IsDead)
+					{
+						// Trigger death event to clear any selection/highlighting state
+						Unit.TriggerUnitDeathEvent(unit);
+					}
+					
 					// For board setup, we can destroy immediately since this is cleanup/reset
 					Destroy(unit.gameObject);
 				}
@@ -563,7 +577,7 @@ namespace ManaGambit
 		{
 			if (board == null || board.units == null) return;
 			
-			Debug.Log($"{LogTag} UpdateBoardIncremental - updating {board.units.Length} units with animations");
+			Debug.Log($"{LogTag} UpdateBoardIncremental - updating {board.units.Length} units with server data including animation states");
 			
 			// Update existing units and create new ones as needed
 			for (int i = 0; i < board.units.Length; i++)
@@ -573,22 +587,16 @@ namespace ManaGambit
 				
 				if (existingUnit != null)
 				{
-					// Unit exists - update its position smoothly if it moved
+					// Clear old occupancy before updating position
 					var currentPos = existingUnit.CurrentPosition;
+					Board.Instance.ClearOccupied(currentPos, existingUnit);
+					
+					// Apply all server data including position and animation state
+					existingUnit.ApplyServerDataUpdate(unitData);
+					
+					// Mark new occupancy after update
 					var newPos = new Vector2Int(unitData.pos.x, unitData.pos.y);
-					
-					if (currentPos != newPos)
-					{
-						// Clear old occupancy
-						Board.Instance.ClearOccupied(currentPos, existingUnit);
-						// Move with animation
-						existingUnit.MoveTo(newPos).Forget();
-						// Mark new occupancy
-						Board.Instance.SetOccupied(newPos, existingUnit);
-					}
-					
-					// Update other properties
-					existingUnit.ApplyHpUpdate(unitData.hp);
+					Board.Instance.SetOccupied(newPos, existingUnit);
 				}
 				else
 				{
@@ -648,9 +656,32 @@ namespace ManaGambit
 				{
 					// Unit no longer exists on server - remove it
 					Board.Instance.ClearOccupied(unit.CurrentPosition, unit);
+					// CRITICAL FIX: Clean up skill tracking to prevent memory leaks
+					CleanupUnitSkillTracking(unit.UnitID);
 					GameManager.Instance.UnregisterUnit(unit.UnitID);
 					unit.Die(); // Use death animation instead of immediate destruction
 				}
+			}
+			
+			// After all board updates, refresh highlights for any selected unit to ensure they're current
+			// This handles cases where positions changed or board occupancy changed
+			try
+			{
+				var clickInput = FindFirstObjectByType<ClickInput>();
+				if (clickInput != null)
+				{
+					// Use reflection to safely call RefreshHighlightsForSelectedUnit
+					var refreshMethod = typeof(ClickInput).GetMethod("RefreshHighlightsForSelectedUnit", 
+						System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+					if (refreshMethod != null)
+					{
+						refreshMethod.Invoke(clickInput, null);
+					}
+				}
+			}
+			catch (System.Exception e)
+			{
+				Debug.LogWarning($"{LogTag} Error refreshing highlights after board update: {e.Message}");
 			}
 		}
 
@@ -670,7 +701,7 @@ namespace ManaGambit
 				string opponentPlayerName = "Opponent";
 
 				// Get local player name from AuthManager
-				if (AuthManager.Instance != null && !string.IsNullOrEmpty(AuthManager.Instance.UserId))
+				if (!string.IsNullOrEmpty(AuthManager.Instance?.UserId))
 				{
 					// Try to get from server data first
 					if (serverPlayerNames != null && serverPlayerNames.TryGetValue(AuthManager.Instance.UserId, out var serverLocalName))
@@ -686,7 +717,7 @@ namespace ManaGambit
 				}
 
 				// Get opponent name
-				if (board != null && board.units != null)
+				if (board?.units != null)
 				{
 					string localUserId = AuthManager.Instance?.UserId;
 					if (!string.IsNullOrEmpty(localUserId))
@@ -724,13 +755,61 @@ namespace ManaGambit
 
 		private void HandleMove(MoveData moveData)
 		{
-			Debug.Log($"{LogTag} HandleMove unitId={moveData.unitId} to={moveData.to.x},{moveData.to.y}");
+			Debug.Log($"{LogTag} HandleMove unitId={moveData.unitId} to={moveData.to.x},{moveData.to.y} animState={moveData.animState} reason={moveData.reason} moveStyle={moveData.moveStyle}");
 			var unit = GameManager.Instance.GetUnitById(moveData.unitId);
 			if (unit != null)
 			{
-				// Clear old occupancy
-				Board.Instance.ClearOccupied(unit.CurrentPosition, unit);
-				// Compute duration from server ticks when available
+				// Determine movement characteristics first (needed for animation and duration logic)
+				bool isPostImpactMove = !string.IsNullOrEmpty(moveData.reason) && moveData.reason.Equals("PostImpact", System.StringComparison.OrdinalIgnoreCase);
+				bool isSwapMove = !string.IsNullOrEmpty(moveData.reason) && moveData.reason.Equals("Swap", System.StringComparison.OrdinalIgnoreCase);
+				bool isTeleportMove = !string.IsNullOrEmpty(moveData.moveStyle) && moveData.moveStyle.Equals("Teleport", System.StringComparison.OrdinalIgnoreCase);
+				bool isApproachMove = !string.IsNullOrEmpty(moveData.reason) && moveData.reason.Equals("Approach", System.StringComparison.OrdinalIgnoreCase);
+				
+				// CRITICAL FIX: Clear occupancy just before movement starts, not at the beginning
+				// This prevents race conditions with rapid move sequences
+				
+				// Apply animation state - server animState takes precedence but consider movement type
+				if (!string.IsNullOrEmpty(moveData.animState))
+				{
+					var serverAnimState = ParseAnimationState(moveData.animState);
+					unit.SetState(serverAnimState);
+					Debug.Log($"{LogTag} HandleMove: Applied server animState '{moveData.animState}' -> {serverAnimState} to unit {moveData.unitId}");
+				}
+				else
+				{
+					// Determine animation state based on movement type when server doesn't specify
+					if (isPostImpactMove)
+					{
+						// For PostImpact moves, trigger appropriate post-impact animation
+						var unitAnimator = unit.GetComponent<UnitAnimator>();
+						if (unitAnimator != null)
+						{
+							// CRITICAL FIX: Get skill index from stored skill data, not just current animator state
+							int skillIndex = GetSkillIndexForPostImpact(moveData, unitAnimator);
+							bool playedPostImpactAnim = unitAnimator.PlayReturnHomeState(skillIndex);
+							Debug.Log($"{LogTag} HandleMove PostImpact: Triggered post-impact animation for unit {moveData.unitId}, skillIndex={skillIndex}, success={playedPostImpactAnim}");
+						}
+						// Don't set Moving state for post-impact - let the animation system handle it
+					}
+					else if (isSwapMove)
+					{
+						// For Swap moves, use brief moving state
+						unit.SetState(UnitState.Moving);
+						Debug.Log($"{LogTag} HandleMove Swap: Unit {moveData.unitId} swapping positions");
+					}
+					else if (isTeleportMove && !isPostImpactMove)
+					{
+						// Pure teleport (not post-impact) - keep current state
+						Debug.Log($"{LogTag} HandleMove Teleport: Unit {moveData.unitId} teleporting instantly");
+					}
+					else
+					{
+						// Regular/approach moves
+						unit.SetState(UnitState.Moving);
+					}
+				}
+				
+				// Compute duration - CRITICAL FIX: Handle teleport moves properly regardless of other flags
 				float durationSeconds = 0f;
 				try
 				{
@@ -741,22 +820,154 @@ namespace ManaGambit
 					}
 				}
 				catch { durationSeconds = 0f; }
+				
+				// CRITICAL FIX: Teleport overrides everything - check this first
+				if (isTeleportMove)
+				{
+					durationSeconds = 0f; // Force instant movement for teleports
+					Debug.Log($"{LogTag} HandleMove: Teleport movement forced to 0 duration for unit {moveData.unitId}");
+				}
+				else if (isSwapMove)
+				{
+					// Swap should be quick but visible
+					durationSeconds = Mathf.Max(durationSeconds, 0.2f);
+				}
+				
 				var dest = new Vector2Int(moveData.to.x, moveData.to.y);
+				
+				// Pass movement type info to MoveTo for proper handling
+				var moveType = isTeleportMove ? "Teleport" : isPostImpactMove ? "PostImpact" : isSwapMove ? "Swap" : "Normal";
+				
+				// CRITICAL FIX: Let MoveTo handle all occupancy management to prevent race conditions
+				// MoveTo will clear source and set destination occupancy at the correct times
 				if (durationSeconds > 0.0001f)
 				{
-					unit.MoveTo(dest, durationSeconds, 0f).Forget();
+					HandleMoveAsyncWithErrorHandling(unit, dest, durationSeconds, 0f, moveType, moveData.unitId).Forget();
 				}
 				else
 				{
-					unit.MoveTo(dest).Forget();
+					HandleMoveAsyncWithErrorHandling(unit, dest, 0f, 0f, moveType, moveData.unitId).Forget();
 				}
-				// Mark new occupancy immediately (temporary until server patch confirms)
-				Board.Instance.SetOccupied(dest, unit);
 			}
 			else
 			{
 				Debug.LogWarning($"Unit not found for move: {moveData.unitId}");
 			}
+		}
+
+		// CRITICAL FIX: Track skill indices for PostImpact moves with proper cleanup to prevent memory leaks
+		private readonly Dictionary<string, int> unitSkillIndexForPostImpact = new Dictionary<string, int>();
+		private readonly Dictionary<string, float> skillIndexTimestamp = new Dictionary<string, float>(); // For cleanup of stale entries
+		
+		private int GetSkillIndexForPostImpact(MoveData moveData, UnitAnimator unitAnimator)
+		{
+			// Clean up stale entries (older than 10 seconds) to prevent memory leaks
+			CleanupStaleSkillIndices();
+			
+			// First try to get the stored skill index for PostImpact moves
+			if (!string.IsNullOrEmpty(moveData.unitId) && unitSkillIndexForPostImpact.TryGetValue(moveData.unitId, out int storedIndex))
+			{
+				// CRITICAL FIX: Validate that stored index is recent (within 5 seconds) to handle network ordering issues
+				if (skillIndexTimestamp.TryGetValue(moveData.unitId, out float timestamp))
+				{
+					float age = Time.realtimeSinceStartup - timestamp;
+					if (age <= 5f) // Use stored index only if recent
+					{
+						return storedIndex;
+					}
+				}
+			}
+			
+			// Fall back to animator's current skill index
+			int currentIndex = unitAnimator.GetCurrentSkillIndex();
+			if (currentIndex >= 0)
+			{
+				return currentIndex;
+			}
+			
+			// Final fallback - try to infer from recent moves or default to 0
+			Debug.LogWarning($"{LogTag} Unable to determine skill index for PostImpact move for unit {moveData.unitId}, defaulting to 0");
+			return 0;
+		}
+		
+		private void CleanupStaleSkillIndices()
+		{
+			float currentTime = Time.realtimeSinceStartup;
+			var keysToRemove = new System.Collections.Generic.List<string>();
+			
+			foreach (var kvp in skillIndexTimestamp)
+			{
+				if (currentTime - kvp.Value > 10f) // Remove entries older than 10 seconds
+				{
+					keysToRemove.Add(kvp.Key);
+				}
+			}
+			
+			foreach (var key in keysToRemove)
+			{
+				unitSkillIndexForPostImpact.Remove(key);
+				skillIndexTimestamp.Remove(key);
+			}
+		}
+		
+		public void CleanupUnitSkillTracking(string unitId)
+		{
+			if (!string.IsNullOrEmpty(unitId))
+			{
+				unitSkillIndexForPostImpact.Remove(unitId);
+				skillIndexTimestamp.Remove(unitId);
+			}
+		}
+		
+		// CRITICAL FIX: Proper async movement handling with error handling and occupancy management
+		private async UniTaskVoid HandleMoveAsyncWithErrorHandling(Unit unit, Vector2Int destination, float duration, float initialProgress, string moveType, string unitId)
+		{
+			if (unit == null) return;
+			
+			Vector2Int sourcePosition = unit.CurrentPosition;
+			
+			try
+			{
+				// Clear source occupancy before starting movement
+				Board.Instance.ClearOccupied(sourcePosition, unit);
+				
+				// Perform the movement
+				await unit.MoveTo(destination, duration, initialProgress, moveType);
+				
+				// Set destination occupancy after successful movement
+				Board.Instance.SetOccupied(destination, unit);
+				
+				Debug.Log($"{LogTag} Successfully moved unit {unitId} from {sourcePosition} to {destination} with moveType {moveType}");
+			}
+			catch (System.OperationCanceledException)
+			{
+				// Movement was cancelled - restore source occupancy
+				Board.Instance.SetOccupied(sourcePosition, unit);
+				Debug.Log($"{LogTag} Movement cancelled for unit {unitId}, restored occupancy at {sourcePosition}");
+			}
+			catch (System.Exception ex)
+			{
+				// Movement failed - restore source occupancy  
+				Board.Instance.SetOccupied(sourcePosition, unit);
+				Debug.LogError($"{LogTag} Movement failed for unit {unitId}: {ex.Message}, restored occupancy at {sourcePosition}");
+			}
+		}
+
+		/// <summary>
+		/// Parse server animation state string to UnitState enum
+		/// </summary>
+		private UnitState ParseAnimationState(string animState)
+		{
+			if (string.IsNullOrEmpty(animState)) return UnitState.Idle;
+			
+			return animState.ToLowerInvariant() switch
+			{
+				"idle" => UnitState.Idle,
+				"moving" => UnitState.Moving,
+				"attacking" => UnitState.Attacking,
+				"windup" => UnitState.WindUp,
+				_ => UnitState.Idle // Default fallback
+			};
 		}
 
 		public void ShowHighlightsForSelection()
@@ -1067,6 +1278,10 @@ namespace ManaGambit
 						var use = DeserializeEventData<UseSkillData>(envelope.data);
 						if (use != null && !string.IsNullOrEmpty(use.unitId))
 						{
+							// CRITICAL FIX: Track skill index for PostImpact moves with timestamp to handle network reordering
+							unitSkillIndexForPostImpact[use.unitId] = use.skillId;
+							skillIndexTimestamp[use.unitId] = Time.realtimeSinceStartup;
+							
 							if (verboseNetworkLogging)
 							{
 								// Create complete use skill data for logging

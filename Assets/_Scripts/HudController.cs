@@ -1,6 +1,7 @@
 using TMPro;
 using UnityEngine;
 using UnityEngine.UI;
+using UnityEngine.Events;
 using Cysharp.Threading.Tasks;
 using DarkTonic.MasterAudio;
 
@@ -25,6 +26,7 @@ namespace ManaGambit
 		[SerializeField, Tooltip("Player names container - set active when joining match")] private GameObject playerNamesContainer;
 		[SerializeField, Tooltip("Text component for local player name")] private TextMeshProUGUI localPlayerNameText;
 		[SerializeField, Tooltip("Text component for opponent player name")] private TextMeshProUGUI opponentPlayerNameText;
+		[SerializeField, Tooltip("Event invoked when countdown timer reaches 0 after match starts")] private UnityEvent onCountdownTimerReachesZero;
 
 		private System.Threading.CancellationTokenSource toastCts;
 		private System.Threading.CancellationTokenSource countdownCts;
@@ -187,6 +189,12 @@ namespace ManaGambit
 					}
 				}
 
+				// Invoke Unity event when countdown reaches 0
+				if (!token.IsCancellationRequested && onCountdownTimerReachesZero != null)
+				{
+					onCountdownTimerReachesZero.Invoke();
+				}
+
 				HideCountdown();
 				if (countdownEndSoundName != string.Empty)
 				{
@@ -214,7 +222,7 @@ namespace ManaGambit
 			// Determine win/lose for the local player
 			bool hasWinner = !string.IsNullOrEmpty(winnerUserId);
 			bool didLocalPlayerWin = false;
-			if (hasWinner && AuthManager.Instance != null && !string.IsNullOrEmpty(AuthManager.Instance.UserId))
+			if (hasWinner && !string.IsNullOrEmpty(AuthManager.Instance?.UserId))
 			{
 				didLocalPlayerWin = string.Equals(winnerUserId, AuthManager.Instance.UserId);
 			}

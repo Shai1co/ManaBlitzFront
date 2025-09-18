@@ -21,13 +21,9 @@ namespace ManaGambit
         [SerializeField] private bool restoreDefaultYawAfterMove = true;
         [Tooltip("Very short crossfade used when stopping Walk due to arrival or stall.")]
         [SerializeField] private float moveStopIdleCrossfadeSeconds = 0.06f;
-        [Header("Motion-driven Walk Control")]
-        [Tooltip("Minimum planar displacement per frame to be considered 'moving' (world units).")]
-        [SerializeField] private float minVisiblePlanarDelta = 0.005f;
-        [Tooltip("How many consecutive 'no-move' frames before snapping to Idle during Moving.")]
-        [SerializeField] private int stalledFramesBeforeIdle = 5;
-        [Tooltip("Minimum time in seconds before stall detection can trigger during movement.")]
-        [SerializeField] private float minMovementTimeBeforeStallCheck = 0.1f;
+        [Header("Server-Driven Animation Control")]
+        [Tooltip("Animation states are now controlled entirely by server data via UnitServerData.animState")]
+        [SerializeField] private bool serverControlledAnimation = true; // Always true - kept for inspector visibility
 
         private const string IdleStateName = "Idle";
         private const string WalkStateName = "Walk";
@@ -59,10 +55,7 @@ namespace ManaGambit
         private float _initialLocalYawDegrees;
         private Unit _unit;
         private UnitState _currentState = UnitState.Idle;
-        private Vector3 _lastWorldPosition;
-        private int _consecutiveStillFrames;
-        private bool _forcedWalkFromMotion;
-        private float _movementStartTime;
+        // NOTE: Motion detection fields removed - animation state now server-controlled
 
         private void Awake()
         {
@@ -73,7 +66,6 @@ namespace ManaGambit
             if (animator == null)
                 Debug.LogError("UnitAnimator: No animator found on " + gameObject.name);
             _unit = GetComponent<Unit>();
-            _lastWorldPosition = transform.position;
         }
 
         private void Start()
@@ -128,19 +120,12 @@ namespace ManaGambit
                         TryPlayState(IdleStateName);
                     }
                     CancelAutoReturn();
-                    // Reset motion tracking when entering Idle
-                    _forcedWalkFromMotion = false;
-                    _consecutiveStillFrames = 0;
                     break;
                 case UnitState.Moving:
                     // For walk, avoid crossfade to prevent late visual start; play immediately from time 0
                     TryPlayStateImmediate(WalkStateName);
                     CancelAutoReturn();
-                    // Reset motion tracking so we don't mis-read the first frame after entering Moving
-                    _lastWorldPosition = transform.position;
-                    _consecutiveStillFrames = 0;
-                    _forcedWalkFromMotion = true;
-                    _movementStartTime = Time.time;
+                    Debug.Log($"{name} UnitAnimator: Walk animation triggered for Moving state (server-controlled)");
                     break;
                 case UnitState.WindUp:
                     // WindUp is no longer used - fall back to Idle
@@ -169,18 +154,11 @@ namespace ManaGambit
                 case UnitState.Idle:
                     SetIdleParametersActive();
                     CancelAutoReturn();
-                    // Reset motion tracking when entering Idle
-                    _forcedWalkFromMotion = false;
-                    _consecutiveStillFrames = 0;
                     break;
                 case UnitState.Moving:
                     SetWalkParametersActive();
                     CancelAutoReturn();
-                    // Reset motion tracking so we don't mis-read the first frame after entering Moving
-                    _lastWorldPosition = transform.position;
-                    _consecutiveStillFrames = 0;
-                    _forcedWalkFromMotion = true;
-                    _movementStartTime = Time.time;
+                    Debug.Log($"{name} UnitAnimator: Walk parameters activated for Moving state (server-controlled)");
                     break;
                 case UnitState.WindUp:
                     // WindUp is no longer used - fall back to Idle
@@ -204,66 +182,14 @@ namespace ManaGambit
 
         private void Update()
         {
-            if (!Application.isPlaying) return;
-            if (animator == null) return;
-
-            // Only gate Walk while in Moving state; allow Attacking/WindUp/Idle as-is
-            if (_currentState != UnitState.Moving) { _lastWorldPosition = transform.position; return; }
-
-            // Measure planar displacement (ignore Y)
-            var current = transform.position;
-            var delta = new Vector3(current.x - _lastWorldPosition.x, 0f, current.z - _lastWorldPosition.z);
-            float minDelta = Mathf.Max(0f, minVisiblePlanarDelta);
-            bool isMovingPlanar = delta.sqrMagnitude > (minDelta * minDelta);
-
-            if (isMovingPlanar)
-            {
-                _consecutiveStillFrames = 0;
-                // Ensure Walk is playing if not already - use appropriate mode
-                if (controlMode == AnimationControlMode.ParameterStateControl)
-                {
-                    // For parameter mode, just ensure Walk parameter is active
-                    if (!GetBoolParameter(WalkParamName))
-                    {
-                        SetWalkParametersActive();
-                        _forcedWalkFromMotion = true;
-                    }
-                }
-                else
-                {
-                    // Direct state control mode
-                    var info = animator.GetCurrentAnimatorStateInfo(BaseLayerIndex);
-                    int walkHash = Animator.StringToHash(WalkStateName);
-                    int walkFullPathHash = Animator.StringToHash($"Base Layer.{WalkStateName}");
-                    bool alreadyWalking = (info.shortNameHash == walkHash) || (info.fullPathHash == walkFullPathHash);
-                    if (!alreadyWalking)
-                    {
-                        TryPlayStateImmediate(WalkStateName);
-                        _forcedWalkFromMotion = true;
-                    }
-                }
-            }
-            else
-            {
-                _consecutiveStillFrames = Mathf.Max(0, _consecutiveStillFrames + 1);
-                int required = Mathf.Max(1, stalledFramesBeforeIdle);
-                float timeSinceMovementStart = Time.time - _movementStartTime;
-                if (_forcedWalkFromMotion && _consecutiveStillFrames >= required && timeSinceMovementStart >= minMovementTimeBeforeStallCheck)
-                {
-                    // Short transition to Idle mid-move if we stopped moving visibly
-                    if (controlMode == AnimationControlMode.ParameterStateControl)
-                    {
-                        SetIdleParametersActive();
-                    }
-                    else
-                    {
-                        CrossfadeToIdle(moveStopIdleCrossfadeSeconds);
-                    }
-                    _forcedWalkFromMotion = false;
-                }
-            }
-
-            _lastWorldPosition = current;
+            // NOTE: Motion detection disabled - animation state is now controlled by server data
+            // All animation state changes should come through SetState() calls from server updates
+            return;
+            
+            // OLD MOTION DETECTION CODE DISABLED:
+            // Animation state is now entirely server-driven via UnitServerData.animState
+            // The server sends both position updates and animation states simultaneously
+            // This ensures perfect synchronization between movement and animation across all clients
         }
 
         // Parameter-based animation control methods
@@ -518,6 +444,11 @@ namespace ManaGambit
             _currentSkillIndex = -1;
         }
 
+        public int GetCurrentSkillIndex()
+        {
+            return _currentSkillIndex;
+        }
+
         public void PlaySkillShotNow(int skillIndex)
         {
             if (animator == null) return;
@@ -679,7 +610,7 @@ namespace ManaGambit
         {
             CancelAutoReturn();
             _autoReturnCts = new System.Threading.CancellationTokenSource();
-            var linked = System.Threading.CancellationTokenSource.CreateLinkedTokenSource(this.GetCancellationTokenOnDestroy(), _autoReturnCts.Token);
+            using var linked = System.Threading.CancellationTokenSource.CreateLinkedTokenSource(this.GetCancellationTokenOnDestroy(), _autoReturnCts.Token);
             int delayMs;
             try
             {
@@ -726,9 +657,10 @@ namespace ManaGambit
             }
 
             _rotationCts = new System.Threading.CancellationTokenSource();
-            var linkedToken = System.Threading.CancellationTokenSource.CreateLinkedTokenSource(
+            using var linkedCts = System.Threading.CancellationTokenSource.CreateLinkedTokenSource(
                 this.GetCancellationTokenOnDestroy(), 
-                _rotationCts.Token).Token;
+                _rotationCts.Token);
+            var linkedToken = linkedCts.Token;
 
             try
             {
@@ -796,13 +728,8 @@ namespace ManaGambit
         {
             // Start smooth rotation back to default facing
             RotateToDefaultYawSmooth().Forget();
-
-            // Stop motion-driven animation checks since move is complete
-            _forcedWalkFromMotion = false;
-            _consecutiveStillFrames = 0;
             
-            // Unit.cs already calls SetState(Idle) which handles the transition, 
-            // so we don't need to crossfade again here to avoid double transitions
+            // NOTE: Animation state is now controlled by server data, not local move completion
         }
     }
 }

@@ -11,16 +11,127 @@ namespace ManaGambit
 		private const int MinMilliseconds = 0;
 		private const float MinLookDirMagnitudeSqr = 0.0001f;
 
-		private Unit unit;
-		private UnitVfxAnchors anchors;
+	private Unit unit;
+	private UnitVfxAnchors anchors;
 
-		private GameObject activeWindup;
-		private CancellationTokenSource vfxCts;
+	private GameObject activeWindup;
+	private CancellationTokenSource vfxCts;
+	
+	// Distance-based idle transition tracking
+	private Vector3 lastPosition;
+	private bool isMonitoringMovement = false;
+	private const float IdleTransitionDelay = 0.15f; // Wait briefly to ensure unit has stopped
+	private const float PositionTolerance = 0.02f; // Distance tolerance for "reached destination"
+	private const float MovementCheckInterval = 0.05f; // Check every 50ms instead of every frame
 
 		private void Awake()
 		{
 			unit = GetComponent<Unit>();
 			anchors = GetComponent<UnitVfxAnchors>();
+			
+			// Subscribe to movement events
+			if (unit != null)
+			{
+				unit.OnMoveStarted += OnMoveStarted;
+				unit.OnMoveCompleted += OnMoveCompleted;
+			}
+		}
+		
+		private void OnDestroy()
+		{
+			// Unsubscribe from events to prevent memory leaks
+			if (unit != null)
+			{
+				unit.OnMoveStarted -= OnMoveStarted;
+				unit.OnMoveCompleted -= OnMoveCompleted;
+			}
+		}
+		
+		private void OnMoveStarted(Unit movingUnit)
+		{
+			// Start monitoring movement when unit begins moving
+			StartMovementMonitoring();
+		}
+		
+		private void OnMoveCompleted(Unit completedUnit)
+		{
+			// Immediately try to transition to idle when movement event fires
+			TransitionToIdleAfterDelay().Forget();
+		}
+		
+		private void StartMovementMonitoring()
+		{
+			if (!isMonitoringMovement)
+			{
+				isMonitoringMovement = true;
+				lastPosition = transform.position;
+				MonitorMovementCoroutine().Forget();
+			}
+		}
+		
+		private async UniTaskVoid MonitorMovementCoroutine()
+		{
+			try
+			{
+				while (isMonitoringMovement && unit != null && this != null)
+				{
+					await UniTask.Delay(System.TimeSpan.FromSeconds(MovementCheckInterval), cancellationToken: this.GetCancellationTokenOnDestroy());
+					
+					if (!isMonitoringMovement || unit == null) break;
+					
+					Vector3 currentPosition = transform.position;
+					float distanceMoved = Vector3.Distance(currentPosition, lastPosition);
+					
+					if (distanceMoved <= PositionTolerance)
+					{
+						// Unit appears stationary - wait a bit longer then transition to idle
+						await UniTask.Delay(System.TimeSpan.FromSeconds(IdleTransitionDelay), cancellationToken: this.GetCancellationTokenOnDestroy());
+						
+						// Double-check unit is still stationary after delay
+						if (isMonitoringMovement && unit != null && Vector3.Distance(transform.position, currentPosition) <= PositionTolerance)
+						{
+							TransitionToIdle();
+							isMonitoringMovement = false; // Stop monitoring until next movement
+						}
+					}
+					else
+					{
+						// Unit is still moving, update position
+						lastPosition = currentPosition;
+					}
+				}
+			}
+			catch (System.OperationCanceledException)
+			{
+				// Component destroyed - expected behavior
+			}
+			catch (System.Exception e)
+			{
+				Debug.LogWarning($"[UnitVfxController] Movement monitoring error: {e.Message}");
+			}
+			finally
+			{
+				isMonitoringMovement = false;
+			}
+		}
+		
+		private async UniTaskVoid TransitionToIdleAfterDelay()
+		{
+			try
+			{
+				// Wait briefly to ensure movement has fully stopped
+				await UniTask.Delay(System.TimeSpan.FromSeconds(0.1f), cancellationToken: this.GetCancellationTokenOnDestroy());
+				
+				// Stop any ongoing movement monitoring since movement completed
+				isMonitoringMovement = false;
+				
+				// Transition to idle
+				TransitionToIdle();
+			}
+			catch (System.OperationCanceledException)
+			{
+				// Component destroyed - expected behavior  
+			}
 		}
 
 		public void CancelAll()
@@ -37,6 +148,9 @@ namespace ManaGambit
 				Destroy(activeWindup);
 				activeWindup = null;
 			}
+			
+			// Stop movement monitoring when cancelling all VFX
+			isMonitoringMovement = false;
 		}
 
 		public void StopWindupNow()
@@ -54,16 +168,9 @@ namespace ManaGambit
 			var preset = VfxManager.Instance.GetPresetByPieceAndIndex(unit.PieceId, Mathf.Max(0, use.skillId), unitConfig);
 			if (preset == null) return;
 
-			// Handle movement if action has move patterns
-			var unitData = unitConfig.GetData(unit.PieceId);
-			if (unitData != null && unitData.actions != null && use.skillId >= 0 && use.skillId < unitData.actions.Length)
-			{
-				var actionInfo = unitData.actions[use.skillId];
-				if (actionInfo != null && actionInfo.move != null && actionInfo.move.patterns != null && actionInfo.move.patterns.Count > 0)
-				{
-					await HandleMovement(use, actionInfo.move);
-				}
-			}
+		// NOTE: Movement handling removed - all movement is now server-authoritative
+		// Server sends Move events for leap behaviors, client should only handle VFX
+		// Leap positioning is calculated by server and sent via Move events
 
 			int delayMs = 0;
 			if (use.hitTick > 0 && serverTick > 0 && use.hitTick > serverTick)
@@ -75,17 +182,20 @@ namespace ManaGambit
 			int windupDurationMs = 0;
 			if (preset.WindupPolicy == SkillVfxPreset.WindupDurationPolicy.FixedMs)
 			{
-				windupDurationMs = Mathf.Max(MinMilliseconds, preset.FixedWindupMs);
+				windupDurationMs = Mathf.Max(100, preset.FixedWindupMs); // Minimum 100ms for visibility
 			}
 			else
 			{
 				if (use.startTick > 0 && use.endWindupTick > use.startTick)
 				{
 					int dt = use.endWindupTick - use.startTick;
-					windupDurationMs = Mathf.Max(MinMilliseconds, Mathf.RoundToInt(dt * NetworkManager.DefaultTickRateMs));
+					windupDurationMs = Mathf.Max(100, Mathf.RoundToInt(dt * NetworkManager.DefaultTickRateMs)); // Minimum 100ms
 				}
-				// When using FromTicks, keep windup until impact if ticks are not present
-				if (windupDurationMs <= 0) windupDurationMs = delayMs;
+				else
+				{
+					// If no server timing provided, use a reasonable default based on delay
+					windupDurationMs = Mathf.Max(200, delayMs / 2); // At least 200ms, or half the total delay
+				}
 			}
 
 			Transform windupAnchor = ResolveSourceAnchor(preset.WindupAttach, preset.CustomSourceAnchorName);
@@ -105,7 +215,7 @@ namespace ManaGambit
 			vfxCts?.Cancel();
 			vfxCts?.Dispose();
 			vfxCts = new CancellationTokenSource();
-			var linked = CancellationTokenSource.CreateLinkedTokenSource(this.GetCancellationTokenOnDestroy(), vfxCts.Token);
+			using var linked = CancellationTokenSource.CreateLinkedTokenSource(this.GetCancellationTokenOnDestroy(), vfxCts.Token);
 
 			// Wind-up
 			if (preset.WindupPrefab != null && windupDurationMs > 0 && windupAnchor != null)
@@ -120,8 +230,8 @@ namespace ManaGambit
 				StopWindupNow();
 			}
 
-			// Projectile
-			if (preset.ProjectilePrefab != null && projectileAnchor != null && delayMs > 0)
+			// Projectile - always spawn if preset has projectile (mirror JS client behavior)
+			if (preset.ProjectilePrefab != null && projectileAnchor != null)
 			{
 				int travelMs = 0;
 				if (preset.TravelMs > 0)
@@ -132,26 +242,32 @@ namespace ManaGambit
 				{
 					float distance = Vector3.Distance(projectileAnchor.position, targetWorldPos);
 					float seconds = Mathf.Max(MinProjectileTravelSeconds, distance / preset.ProjectileSpeedUnitsPerSec);
-					travelMs = Mathf.Max(MinMilliseconds, Mathf.RoundToInt(seconds * 1000f));
+					travelMs = Mathf.Max(50, Mathf.RoundToInt(seconds * 1000f)); // Minimum 50ms like JS client
 				}
-				if (travelMs > 0)
+				else
 				{
-					int launchDelayMs = Mathf.Max(MinMilliseconds, delayMs - travelMs);
+					// Default travel time for instant skills (like JS client default of 200ms)
+					travelMs = 200;
+				}
+				
+				// Always spawn projectile, but time it correctly
+				if (delayMs > 0 && travelMs > 0)
+				{
+					// For skills with proper timing, launch projectile so it arrives at hitTick
+					int launchDelayMs = Mathf.Max(0, delayMs - travelMs);
 					await UniTask.Delay(launchDelayMs, cancellationToken: linked.Token).SuppressCancellationThrow();
+					await VfxManager.Instance.PlayProjectile(projectileAnchor, targetWorldPos, preset.ProjectilePrefab, travelMs, preset.ProjectileLookAtCamera, preset.ProjectileArcDegrees, linked.Token);
+				}
+				else
+				{
+					// For instant skills or missing timing, spawn projectile immediately with default travel
 					await VfxManager.Instance.PlayProjectile(projectileAnchor, targetWorldPos, preset.ProjectilePrefab, travelMs, preset.ProjectileLookAtCamera, preset.ProjectileArcDegrees, linked.Token);
 				}
 			}
 
-			// Handle post-impact behavior
-			var unitData2 = unitConfig.GetData(unit.PieceId);
-			if (unitData2 != null && unitData2.actions != null && use.skillId >= 0 && use.skillId < unitData2.actions.Length)
-			{
-				var actionInfo = unitData2.actions[use.skillId];
-				if (actionInfo != null && actionInfo.move != null && actionInfo.move.postImpact != null)
-				{
-					await HandlePostImpact(actionInfo.move.postImpact, new UnityEngine.Vector2Int(unit.CurrentPosition.x, unit.CurrentPosition.y), use.skillId, targetCell);
-				}
-			}
+		// NOTE: Post-impact movement handling removed - all movement is now server-authoritative
+		// Server calculates ReturnHome and LandNearTarget behaviors and sends Move events
+		// Client should only handle VFX, not position updates
 		}
 
 		private Transform ResolveSourceAnchor(SkillVfxPreset.SourceAnchor which, string customName)
@@ -168,111 +284,9 @@ namespace ManaGambit
 			return ta.FindTargetAnchor(which, customName);
 		}
 
-		private async UniTask HandleMovement(UseSkillData use, UnitConfig.MoveEffect moveEffect)
-		{
-			if (use == null || use.target == null || use.target.cell == null || moveEffect == null)
-				return;
-
-			// Get current and target positions
-			UnityEngine.Vector2Int currentPos = new UnityEngine.Vector2Int(unit.CurrentPosition.x, unit.CurrentPosition.y);
-			UnityEngine.Vector2Int targetPos = new UnityEngine.Vector2Int(use.target.cell.x, use.target.cell.y);
-
-			// Validate that the target position is actually reachable according to the pattern
-			if (!UnitConfig.IsValidMovementTarget(currentPos, targetPos, moveEffect, unit.OwnerId.ToString()))
-			{
-				return; // Target is not valid for movement
-			}
-
-			// Calculate movement path based on patterns
-			UnityEngine.Vector2Int movementTarget = UnitConfig.CalculateMovementPath(currentPos, targetPos, moveEffect, unit.OwnerId.ToString());
-			// Guard: never land on an occupied target cell; prefer cell just before target along approach
-			if (movementTarget == targetPos)
-			{
-				var dirToTarget = new UnityEngine.Vector2Int(Mathf.Clamp(targetPos.x - currentPos.x, -1, 1), Mathf.Clamp(targetPos.y - currentPos.y, -1, 1));
-				var before = new UnityEngine.Vector2Int(targetPos.x - dirToTarget.x, targetPos.y - dirToTarget.y);
-				if (InBounds(before.x, before.y) && !IsOccupied(before))
-				{
-					movementTarget = before;
-				}
-			}
-			// Mirror JS: if stopOnHit, land just before the target along the approach direction
-			if (moveEffect.patterns != null && moveEffect.patterns.Count > 0 && moveEffect.patterns[0] != null && moveEffect.patterns[0].stopOnHit)
-			{
-				var dir = new UnityEngine.Vector2Int(Mathf.Clamp(targetPos.x - currentPos.x, -1, 1), Mathf.Clamp(targetPos.y - currentPos.y, -1, 1));
-				if (dir != UnityEngine.Vector2Int.zero)
-				{
-					var candidate = new UnityEngine.Vector2Int(targetPos.x - dir.x, targetPos.y - dir.y);
-					while (candidate != currentPos && IsOccupied(candidate))
-					{
-						candidate = new UnityEngine.Vector2Int(candidate.x - dir.x, candidate.y - dir.y);
-					}
-					if (candidate != currentPos)
-					{
-						movementTarget = candidate;
-					}
-				}
-			}
-
-			// If movement target is different from current position, move the unit
-			if (movementTarget != currentPos)
-			{
-				// Face the movement direction (Y rotation only)
-				var board = Board.Instance;
-				if (board != null)
-				{
-					Vector3 startWorld = board.GetSlotWorldPosition(currentPos);
-					Vector3 targetWorldCenter = board.GetSlotWorldPosition(movementTarget);
-					Vector3 lookDelta = targetWorldCenter - startWorld;
-					lookDelta.y = 0f;
-					if (lookDelta.sqrMagnitude > MinLookDirMagnitudeSqr)
-					{
-						float yaw = Mathf.Atan2(lookDelta.x, lookDelta.z) * Mathf.Rad2Deg;
-						var e = unit.transform.eulerAngles;
-						e.y = yaw;
-						unit.transform.eulerAngles = e;
-					}
-				}
-				// Use the public MoveTo method which properly updates position and handles animation.
-				// Apply an attack offset if defined in the preset for this skill.
-				var preset = VfxManager.Instance.GetPresetByPieceAndIndex(unit.PieceId, Mathf.Max(0, use.skillId), NetworkManager.Instance != null ? NetworkManager.Instance.UnitConfigAsset : null);
-				float attackOffset = preset != null ? Mathf.Max(0f, preset.AttackMoveOffsetWorldUnits) : 0f;
-				if (attackOffset <= 0f)
-				{
-					await unit.MoveTo(movementTarget);
-				}
-				else
-				{
-					// Move to the tile but stop short by offset along the movement direction
-					var board2 = Board.Instance;
-					if (board2 == null)
-					{
-						await unit.MoveTo(movementTarget);
-					}
-					else
-					{
-						Vector3 startWorld = board2.GetSlotWorldPosition(currentPos);
-						Vector3 targetWorldCenter = board2.GetSlotWorldPosition(movementTarget);
-						Vector3 delta = targetWorldCenter - startWorld;
-						delta.y = 0f;
-						Vector3 dir = delta.sqrMagnitude > 0.0001f ? delta.normalized : Vector3.forward;
-						Vector3 adjusted = targetWorldCenter - (dir * attackOffset);
-						// Temporarily teleport using transform for offset, then update logical coord to the target tile
-						await unit.MoveTo(movementTarget);
-						unit.transform.position = adjusted;
-					}
-				}
-
-				// Handle post-impact behavior
-				if (moveEffect.postImpact != null)
-				{
-					await HandlePostImpact(moveEffect.postImpact, currentPos, use.skillId, targetPos);
-				}
-				else
-				{
-					TransitionToIdle();
-				}
-			}
-		}
+		// REMOVED: HandleMovement method - all movement is now server-authoritative
+		// Server calculates leap destinations and sends Move events
+		// Client should not perform local movement calculations
 
 		private float EstimateTileWorldSize(Board board, Vector2Int coord)
 		{
@@ -287,130 +301,26 @@ namespace ManaGambit
 			return Mathf.Max(sx, sy);
 		}
 
-		private async UniTask HandlePostImpact(UnitConfig.PostImpact postImpact, UnityEngine.Vector2Int originalPos, int skillIndex, UnityEngine.Vector2Int targetCell)
-		{
-			if (postImpact == null) return;
-
-			string behaviorKey = postImpact.behavior;
-			if (!string.IsNullOrEmpty(behaviorKey)) behaviorKey = behaviorKey.Replace(" ", string.Empty).ToLowerInvariant();
-			switch (behaviorKey)
-			{
-				case "returnhome":
-					// Play return-home animation clip if available during the return movement
-					var ua = unit.GetComponent<UnitAnimator>();
-					if (ua != null)
-					{
-						ua.SetSkillIndex(Mathf.Max(0, skillIndex));
-						ua.PlayReturnHomeState(Mathf.Max(0, skillIndex));
-					}
-					await unit.MoveTo(originalPos);
-					TransitionToIdle();
-					break;
-
-				case "landneartarget":
-				{
-					int radius = Mathf.Max(1, postImpact.radius);
-					bool pickRandom = postImpact.random;
-					var board = Board.Instance;
-					if (board == null) break;
-					UnityEngine.Vector2Int? chosen = FindLandNearTargetCell(targetCell, radius, pickRandom);
-					if (chosen.HasValue)
-					{
-						await unit.MoveTo(chosen.Value);
-					}
-					// After landing, return to idle
-					TransitionToIdle();
-					break;
-				}
-
-				default:
-					// Default: ensure we return to idle
-					TransitionToIdle();
-					break;
-			}
-		}
+		// REMOVED: HandlePostImpact method - all post-impact movement is now server-authoritative
+		// Server handles ReturnHome and LandNearTarget behaviors and sends Move events
 
 		private void TransitionToIdle(float crossfadeDuration = 0.15f)
 		{
+			if (unit == null) return;
+			
 			var unitAnimator = unit.GetComponent<UnitAnimator>();
 			if (unitAnimator != null)
 			{
+				// Only transition if not already in an appropriate idle-like state
+				// Let the animation system handle the actual state checking
 				unitAnimator.CrossfadeToIdle(crossfadeDuration);
 				unitAnimator.ClearSkillIndex();
 			}
 		}
 
-		private UnityEngine.Vector2Int? FindLandNearTargetCell(UnityEngine.Vector2Int target, int radius, bool random)
-		{
-			// Build all candidate cells within Chebyshev distance [1..radius]
-			radius = Mathf.Max(1, radius);
-			System.Collections.Generic.List<UnityEngine.Vector2Int> candidates = new System.Collections.Generic.List<UnityEngine.Vector2Int>(radius * radius * 8);
-			for (int dy = -radius; dy <= radius; dy++)
-			{
-				for (int dx = -radius; dx <= radius; dx++)
-				{
-					if (dx == 0 && dy == 0) continue; // exclude target itself
-					int cheb = Mathf.Max(Mathf.Abs(dx), Mathf.Abs(dy));
-					if (cheb < 1 || cheb > radius) continue;
-					int x = target.x + dx;
-					int y = target.y + dy;
-					if (!InBounds(x, y)) continue;
-					var cell = new UnityEngine.Vector2Int(x, y);
-					if (!IsOccupied(cell)) candidates.Add(cell);
-				}
-			}
-			if (candidates.Count == 0) return null;
-			if (random)
-			{
-				for (int i = 0; i < candidates.Count; i++)
-				{
-					int j = UnityEngine.Random.Range(i, candidates.Count);
-					(var a, var b) = (candidates[i], candidates[j]);
-					candidates[i] = b; candidates[j] = a;
-				}
-				return candidates[0];
-			}
-			else
-			{
-				// Prefer the immediate cell before target along approach vector if available
-				var from = new UnityEngine.Vector2Int(unit.CurrentPosition.x, unit.CurrentPosition.y);
-				var dir = new UnityEngine.Vector2Int(Mathf.Clamp(target.x - from.x, -1, 1), Mathf.Clamp(target.y - from.y, -1, 1));
-				if (dir != UnityEngine.Vector2Int.zero)
-				{
-					var immediate = new UnityEngine.Vector2Int(target.x - dir.x, target.y - dir.y);
-					for (int i = 0; i < candidates.Count; i++) { if (candidates[i] == immediate) return immediate; }
-				}
-				// Fallback: choose closest-by-distance to target
-				int bestIdx = 0; int bestCheb = 9999;
-				for (int i = 0; i < candidates.Count; i++)
-				{
-					var c = candidates[i];
-					int cheb = Mathf.Max(Mathf.Abs(c.x - target.x), Mathf.Abs(c.y - target.y));
-					if (cheb < bestCheb) { bestCheb = cheb; bestIdx = i; }
-				}
-				return candidates[bestIdx];
-			}
-		}
+		// REMOVED: FindLandNearTargetCell method - server calculates landing positions
 
-		private static bool InBounds(int x, int y)
-		{
-			return x >= 0 && x < Board.Size && y >= 0 && y < Board.Size;
-		}
-
-		private static bool IsOccupied(UnityEngine.Vector2Int pos)
-		{
-			if (GameManager.Instance == null || Board.Instance == null) return false;
-			var allUnits = GameManager.Instance.GetAllUnits();
-			for (int i = 0; i < allUnits.Count; i++)
-			{
-				var u = allUnits[i];
-				if (u == null) continue;
-				UnityEngine.Vector2Int up;
-				try { if (Board.Instance.TryGetCoord(u, out up) && up == pos) return true; }
-				catch { }
-			}
-			return false;
-		}
+		// REMOVED: InBounds and IsOccupied helper methods - no longer needed for server-authoritative movement
 	}
 }
 

@@ -44,6 +44,30 @@ namespace ManaGambit
         public event Action<Unit> OnMoveCompleted;
         public event Action<Unit> OnSkillStarted;
         public event Action<Unit> OnSkillCompleted;
+        
+        // Static event for unit death notification - allows ClickInput to clear highlights when selected unit dies
+        public static event Action<Unit> OnUnitDied;
+        
+        // Static event for unit position changes - allows ClickInput to refresh highlights when selected unit moves via server
+        public static event Action<Unit> OnUnitPositionChanged;
+        
+        /// <summary>
+        /// Public method to trigger unit death event - used by external systems like NetworkManager during board resets
+        /// </summary>
+        public static void TriggerUnitDeathEvent(Unit unit)
+        {
+            if (unit != null)
+            {
+                try
+                {
+                    OnUnitDied?.Invoke(unit);
+                }
+                catch (System.Exception e)
+                {
+                    Debug.LogWarning($"Error triggering unit death event for {unit.name}: {e.Message}");
+                }
+            }
+        }
 
         public Vector2Int CurrentPosition => currentPosition;
 
@@ -64,6 +88,23 @@ namespace ManaGambit
         public void SetOwnerId(string id)
         {
             ownerId = id;
+        }
+        
+        /// <summary>
+        /// Parse server animation state string to UnitState enum
+        /// </summary>
+        private UnitState ParseAnimationState(string animState)
+        {
+            if (string.IsNullOrEmpty(animState)) return UnitState.Idle;
+            
+            return animState.ToLowerInvariant() switch
+            {
+                "idle" => UnitState.Idle,
+                "moving" => UnitState.Moving,
+                "attacking" => UnitState.Attacking,
+                "windup" => UnitState.WindUp,
+                _ => UnitState.Idle // Default fallback
+            };
         }
 
         public int CurrentHp => currentHp;
@@ -92,14 +133,14 @@ namespace ManaGambit
             await MoveTo(new Vector2Int(x, y));
         }
 
-        public async UniTask MoveTo(Vector2Int target)
+        public async UniTask MoveTo(Vector2Int target, string moveType = "Normal")
         {
-            await MoveTo(target, DefaultMoveDurationSeconds, 0f);
+            await MoveTo(target, DefaultMoveDurationSeconds, 0f, moveType);
         }
 
-        public async UniTask MoveTo(Vector2Int target, float durationSeconds, float initialProgress)
+        public async UniTask MoveTo(Vector2Int target, float durationSeconds, float initialProgress, string moveType = "Normal")
         {
-            Debug.Log($"{name} MoveTo {target} duration={durationSeconds} initialProgress={initialProgress}");
+            Debug.Log($"{name} MoveTo {target} duration={durationSeconds} initialProgress={initialProgress} moveType={moveType} - Transform movement only (server controls animation state)");
 
             if (moveCts != null)
             {
@@ -132,13 +173,16 @@ namespace ManaGambit
                     }
                     transform.position = endPos;
                     currentPosition = target;
-                    SetState(UnitState.Idle);
+                    // CRITICAL FIX: Don't force Idle for Teleport moves - server controls animation state
+                    if (moveType != "Teleport" && moveType != "PostImpact")
+                    {
+                        SetState(UnitState.Idle);
+                    }
                     OnMoveCompleted?.Invoke(this);
                     return;
                 }
 
-                // Only enter Moving state when we will actually animate over time
-                SetState(UnitState.Moving);
+                // NOTE: Animation state (Moving/Idle) should be set by server data, not locally
                 OnMoveStarted?.Invoke(this);
 
                 // Face movement direction at movement start using local Y rotation only
@@ -155,8 +199,11 @@ namespace ManaGambit
                 {
                     if (moveToken.IsCancellationRequested)
                     {
-                        // Ensure lifecycle notification on cancellation and return to Idle
-                        SetState(UnitState.Idle);
+                        // CRITICAL FIX: Don't force Idle for special moves on cancellation - server controls animation state
+                        if (moveType != "Teleport" && moveType != "PostImpact")
+                        {
+                            SetState(UnitState.Idle);
+                        }
                         OnMoveCompleted?.Invoke(this);
                         return;
                     }
@@ -171,8 +218,11 @@ namespace ManaGambit
                     }
                     catch (OperationCanceledException)
                     {
-                        // Cancellation can occur between our IsCancellationRequested check and the await
-                        SetState(UnitState.Idle);
+                        // CRITICAL FIX: Don't force Idle for special moves on exception - server controls animation state
+                        if (moveType != "Teleport" && moveType != "PostImpact")
+                        {
+                            SetState(UnitState.Idle);
+                        }
                         OnMoveCompleted?.Invoke(this);
                         return;
                     }
@@ -181,7 +231,11 @@ namespace ManaGambit
                 transform.position = endPos;
                 currentPosition = target;
 
-                SetState(UnitState.Idle);
+                // CRITICAL FIX: Don't force Idle for special moves - server controls animation state
+                if (moveType != "Teleport" && moveType != "PostImpact")
+                {
+                    SetState(UnitState.Idle);
+                }
                 OnMoveCompleted?.Invoke(this);
             }
             finally
@@ -242,7 +296,7 @@ namespace ManaGambit
                     {
                         _actionCts = new CancellationTokenSource();
                     }
-                    var linked = CancellationTokenSource.CreateLinkedTokenSource(this.GetCancellationTokenOnDestroy(), _actionCts.Token);
+                    using var linked = CancellationTokenSource.CreateLinkedTokenSource(this.GetCancellationTokenOnDestroy(), _actionCts.Token);
                     for (int s = 1; s < amount; s++)
                     {
                         int delay = s * intervalMs;
@@ -266,8 +320,26 @@ namespace ManaGambit
         {
             if (use == null) return;
             OnSkillStarted?.Invoke(this);
+            
+            // Determine target and handle movement-based skills
             var targetCell = use.target != null && use.target.cell != null ? new Vector2Int(use.target.cell.x, use.target.cell.y) : currentPosition;
-            transform.LookAt(Board.Instance.GetSlotWorldPosition(targetCell));
+            var targetWorldPos = Board.Instance.GetSlotWorldPosition(targetCell);
+            
+            // Check if this is a movement-based skill (like leap attack)
+            bool isMovementSkill = false;
+            if (use.origin != null)
+            {
+                var origin = new Vector2Int(use.origin.x, use.origin.y);
+                isMovementSkill = origin != targetCell && Vector2Int.Distance(origin, targetCell) > 1;
+                
+                if (isMovementSkill)
+                {
+                    Debug.Log($"[Unit] Movement-based skill: {unitID} from {origin} to {targetCell} - server will handle positioning");
+                }
+            }
+            
+            // Face the target (important for both regular and movement skills)
+            transform.LookAt(targetWorldPos);
 
             int windUpMs = 0;
             if (use.startTick > 0 && use.endWindupTick > use.startTick)
@@ -307,7 +379,7 @@ namespace ManaGambit
                     }
                     
                     // Create linked token for both destroy and manual cancellation
-                    var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(this.GetCancellationTokenOnDestroy(), _actionCts.Token);
+                    using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(this.GetCancellationTokenOnDestroy(), _actionCts.Token);
                     
                     await UniTask.Delay(hitDelayMs, cancellationToken: linkedCts.Token);
                 }
@@ -471,7 +543,57 @@ namespace ManaGambit
             currentHp = Mathf.Clamp(data.hp, 0, Mathf.Max(1, maxHp));
             ApplyHpUpdate(currentHp);
             currentMana = data.mana;
+            
+            // Apply server-provided animation state
+            if (!string.IsNullOrEmpty(data.animState))
+            {
+                var serverAnimState = ParseAnimationState(data.animState);
+                SetState(serverAnimState);
+                Debug.Log($"{name} SetInitialData: Server provided animState '{data.animState}' -> {serverAnimState}");
+            }
             // TODO: Update UI or other components with hp/mana
+        }
+        
+        /// <summary>
+        /// Apply server data update including position, HP, and animation state
+        /// </summary>
+        public void ApplyServerDataUpdate(UnitServerData data)
+        {
+            var currentPos = CurrentPosition;
+            var newPos = new Vector2Int(data.pos.x, data.pos.y);
+            
+            // Handle position changes
+            if (currentPos != newPos)
+            {
+                // Update position immediately (server is authoritative)
+                currentPosition = newPos;
+                transform.position = Board.Instance.GetSlotWorldPosition(newPos);
+                Debug.Log($"{name} ApplyServerDataUpdate: Position changed from {currentPos} to {newPos}");
+                
+                // Notify systems that this unit's position changed (for highlight refresh)
+                try
+                {
+                    OnUnitPositionChanged?.Invoke(this);
+                }
+                catch (System.Exception e)
+                {
+                    Debug.LogWarning($"{name} error notifying unit position change listeners: {e.Message}");
+                }
+            }
+            
+            // Apply HP update
+            ApplyHpUpdate(data.hp);
+            
+            // Apply mana update
+            currentMana = data.mana;
+            
+            // Apply server-provided animation state (most important for sync)
+            if (!string.IsNullOrEmpty(data.animState))
+            {
+                var serverAnimState = ParseAnimationState(data.animState);
+                SetState(serverAnimState);
+                Debug.Log($"{name} ApplyServerDataUpdate: Server animState '{data.animState}' -> {serverAnimState}");
+            }
         }
 
         public void ApplyHpUpdate(int newHp)
@@ -485,9 +607,8 @@ namespace ManaGambit
                 if (icons == null) icons = GetComponentInChildren<UnitStatusIcons>(true);
                 if (icons != null)
                 {
-                    bool isOwn = AuthManager.Instance != null && 
-                                !string.IsNullOrEmpty(AuthManager.Instance.UserId) && 
-                                string.Equals(ownerId, AuthManager.Instance.UserId, StringComparison.Ordinal);
+            bool isOwn = AuthManager.Instance?.UserId != null && 
+                        string.Equals(ownerId, AuthManager.Instance.UserId, StringComparison.Ordinal);
                     icons.SetHp(currentHp, Mathf.Max(1, maxHp), isOwn);
                 }
             }
@@ -510,7 +631,7 @@ namespace ManaGambit
             }
         }
 
-        private void SetState(UnitState newState)
+        public void SetState(UnitState newState)
         {
             // Don't accept any state changes after unit is dead
             if (isDead)
@@ -544,6 +665,16 @@ namespace ManaGambit
 
             Debug.Log($"{name} is dying - playing death animation");
             isDead = true;
+
+            // Notify any systems tracking this unit (e.g., ClickInput for highlight cleanup)
+            try
+            {
+                OnUnitDied?.Invoke(this);
+            }
+            catch (System.Exception e)
+            {
+                Debug.LogWarning($"{name} error notifying unit death listeners: {e.Message}");
+            }
 
             // Stop all ongoing actions
             Stop();
@@ -596,9 +727,10 @@ namespace ManaGambit
             try
             {
                 _deathCts = new CancellationTokenSource();
-                var linkedToken = CancellationTokenSource.CreateLinkedTokenSource(
+                using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(
                     this.GetCancellationTokenOnDestroy(), 
-                    _deathCts.Token).Token;
+                    _deathCts.Token);
+                var linkedToken = linkedCts.Token;
 
                 int delayMs = Mathf.RoundToInt(DeathAnimationDelaySeconds * 1000f);
                 await UniTask.Delay(delayMs, cancellationToken: linkedToken);
@@ -611,6 +743,12 @@ namespace ManaGambit
                 if (GameManager.Instance != null)
                 {
                     GameManager.Instance.UnregisterUnit(unitID);
+                }
+                
+                // CRITICAL FIX: Clean up skill tracking in NetworkManager to prevent memory leaks
+                if (NetworkManager.Instance != null && !string.IsNullOrEmpty(unitID))
+                {
+                    NetworkManager.Instance.CleanupUnitSkillTracking(unitID);
                 }
 
                 Debug.Log($"{name} destruction timer completed - destroying GameObject");
@@ -630,6 +768,25 @@ namespace ManaGambit
 
         private void OnDestroy()
         {
+            // If unit is being destroyed without going through Die(), still notify death event
+            if (!isDead)
+            {
+                try
+                {
+                    OnUnitDied?.Invoke(this);
+                }
+                catch (System.Exception e)
+                {
+                    Debug.LogWarning($"{name} error notifying unit death listeners in OnDestroy: {e.Message}");
+                }
+            }
+            
+            // CRITICAL FIX: Clean up skill tracking in NetworkManager to prevent memory leaks
+            if (NetworkManager.Instance != null && !string.IsNullOrEmpty(unitID))
+            {
+                NetworkManager.Instance.CleanupUnitSkillTracking(unitID);
+            }
+            
             // Ensure proper cleanup of cancellation token sources
             if (moveCts != null)
             {

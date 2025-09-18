@@ -253,10 +253,10 @@ namespace ManaGambit
 			occupant = unit;
 		}
 
-		public void ClearOccupant(Unit unit)
-		{
-			if (occupant == unit) occupant = null;
-		}
+	public void ClearOccupant(Unit unit)
+	{
+		if (occupant == unit) occupant = null;
+	}
 	}
 }
 

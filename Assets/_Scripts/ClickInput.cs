@@ -32,7 +32,7 @@ namespace ManaGambit
 		private Unit targetingUnit;
 		private bool isTargetingSkill = false;
 		private int pendingSkillIndex = NoSkillIndex;
-		private int currentSelectedSkillIndex = NoSkillIndex;
+		private int currentSelectedSkillIndex = 0; // Default to first skill
 		[SerializeField] private bool debugInput = false;
 		[SerializeField] private MonoBehaviour skillBarUI; // optional hook for UI updates; must implement ISkillBarUI
 		private ISkillBarUI SkillBar => skillBarUI as ISkillBarUI;
@@ -59,6 +59,12 @@ namespace ManaGambit
 			{
 				NetworkManager.Instance.OnValidTargets += HandleValidTargets;
 			}
+			
+			// Subscribe to unit death events to clear highlights when selected unit dies
+			Unit.OnUnitDied += HandleUnitDeath;
+			
+			// Subscribe to unit position change events to refresh highlights when selected unit moves via server
+			Unit.OnUnitPositionChanged += HandleUnitPositionChanged;
 		}
 
 		private void OnDisable()
@@ -69,6 +75,15 @@ namespace ManaGambit
 			{
 				NetworkManager.Instance.OnValidTargets -= HandleValidTargets;
 			}
+			
+			// Unsubscribe from unit death events
+			Unit.OnUnitDied -= HandleUnitDeath;
+			
+			// Unsubscribe from unit position change events
+			Unit.OnUnitPositionChanged -= HandleUnitPositionChanged;
+			
+			// Clean up any remaining event hooks
+			DetachUnitHighlightHooks();
 		}
 
 		private void Update()
@@ -121,14 +136,13 @@ namespace ManaGambit
 					{
 						if (TryExecuteSkillOnUnit(targetingUnit, unit, pendingSkillIndex))
 						{
-							isTargetingSkill = false;
-							pendingSkillIndex = NoSkillIndex;
-							// Clear both move and skill highlights on cast start
-							Board.Instance.ClearMoveHighlights();
-							Board.Instance.ClearSkillHighlights();
-							// Clear the selected skill after use
-							currentSelectedSkillIndex = NoSkillIndex;
-							if (SkillBar != null) SkillBar.SetSelectedSkillIndex(currentSelectedSkillIndex);
+						isTargetingSkill = false;
+						pendingSkillIndex = NoSkillIndex;
+						// Clear both move and skill highlights on cast start
+						Board.Instance.ClearMoveHighlights();
+						Board.Instance.ClearSkillHighlights();
+						// Keep skill selected after use for consistency
+						if (SkillBar != null) SkillBar.SetSelectedSkillIndex(currentSelectedSkillIndex);
 							// Restore move/skill previews after the skill completes
 							void RestoreAfterSkill(Unit u)
 							{
@@ -356,29 +370,29 @@ namespace ManaGambit
 				return;
 			}
 
-			// Toggle highlight between previous and new selection
-			var previous = selectedUnit;
-			selectedUnit = unit;
-			if (previous != null && previous != selectedUnit)
-			{
-				SetUnitSelectionHighlight(previous, false);
-				DetachUnitHighlightHooks();
-			}
-			SetUnitSelectionHighlight(selectedUnit, true);
-			AttachUnitHighlightHooks(selectedUnit);
-			// Reset explicit targeting state; only clear selected skill when switching units
-			isTargetingSkill = false;
-			pendingSkillIndex = NoSkillIndex;
-			if (previous != selectedUnit)
-			{
-				currentSelectedSkillIndex = NoSkillIndex;
-			}
-			RefreshHighlightsForSelectedUnit();
-			if (SkillBar != null)
-			{
-				SkillBar.BindUnit(selectedUnit);
-				SkillBar.SetSelectedSkillIndex(currentSelectedSkillIndex);
-			}
+		// Toggle highlight between previous and new selection
+		var previous = selectedUnit;
+		selectedUnit = unit;
+		if (previous != null && previous != selectedUnit)
+		{
+			SetUnitSelectionHighlight(previous, false);
+			DetachUnitHighlightHooks();
+		}
+		SetUnitSelectionHighlight(selectedUnit, true);
+		AttachUnitHighlightHooks(selectedUnit);
+		// Reset explicit targeting state; only clear selected skill when switching units
+		isTargetingSkill = false;
+		pendingSkillIndex = NoSkillIndex;
+		if (previous != selectedUnit)
+		{
+			currentSelectedSkillIndex = 0; // Default to first skill when switching units
+		}
+		RefreshHighlightsForSelectedUnit();
+		if (SkillBar != null)
+		{
+			SkillBar.BindUnit(selectedUnit);
+			SkillBar.SetSelectedSkillIndex(currentSelectedSkillIndex);
+		}
 		}
 
 		private void RefreshHighlightsForSelectedUnit()
@@ -388,6 +402,15 @@ namespace ManaGambit
 				Board.Instance.HideAllHighlights();
 				return;
 			}
+			
+			// Safety check: if selected unit is dead, clear selection
+			if (selectedUnit.IsDead)
+			{
+				if (debugInput) Debug.Log("[ClickInput] RefreshHighlightsForSelectedUnit detected dead selected unit - clearing selection");
+				HandleUnitDeath(selectedUnit);
+				return;
+			}
+			
 			var cfg = NetworkManager.Instance != null ? NetworkManager.Instance.UnitConfigAsset : null;
 			if (cfg == null)
 			{
@@ -430,11 +453,22 @@ namespace ManaGambit
 		private void DetachUnitHighlightHooks()
 		{
 			if (highlightHookUnit == null) return;
-			highlightHookUnit.OnMoveStarted -= OnUnitMoveStarted;
-			highlightHookUnit.OnMoveCompleted -= OnUnitMoveCompleted;
-			highlightHookUnit.OnSkillStarted -= OnUnitSkillStarted;
-			highlightHookUnit.OnSkillCompleted -= OnUnitSkillCompleted;
-			highlightHookUnit = null;
+			
+			try
+			{
+				highlightHookUnit.OnMoveStarted -= OnUnitMoveStarted;
+				highlightHookUnit.OnMoveCompleted -= OnUnitMoveCompleted;
+				highlightHookUnit.OnSkillStarted -= OnUnitSkillStarted;
+				highlightHookUnit.OnSkillCompleted -= OnUnitSkillCompleted;
+			}
+			catch (System.Exception e)
+			{
+				Debug.LogWarning($"[ClickInput] Error detaching unit highlight hooks from {highlightHookUnit.name}: {e.Message}");
+			}
+			finally
+			{
+				highlightHookUnit = null;
+			}
 		}
 
 	private void OnUnitMoveStarted(Unit u)
@@ -573,11 +607,11 @@ namespace ManaGambit
 				// Clear highlights at the start of skill usage
 				Board.Instance.ClearMoveHighlights();
 				Board.Instance.ClearSkillHighlights();
-				// Keep unit selected; exit explicit targeting state and clear selected skill after use
-				isTargetingSkill = false;
-				pendingSkillIndex = NoSkillIndex;
-				currentSelectedSkillIndex = NoSkillIndex;
-				if (SkillBar != null) SkillBar.SetSelectedSkillIndex(currentSelectedSkillIndex);
+			// Keep unit selected; exit explicit targeting state but maintain selected skill
+			isTargetingSkill = false;
+			pendingSkillIndex = NoSkillIndex;
+			// Keep currentSelectedSkillIndex unchanged so skill remains selected after use
+			if (SkillBar != null) SkillBar.SetSelectedSkillIndex(currentSelectedSkillIndex);
 				// Subscribe to restore overlays after skill completes
 				void RestoreAfterSkill(Unit u)
 				{
@@ -779,6 +813,88 @@ namespace ManaGambit
 			var target = new SkillTarget { cell = new Pos { x = toCoord.x, y = toCoord.y } };
 			_ = IntentManager.Instance.SendUseSkillIntent(selectedUnit.UnitID, DefaultSkillIndex, target);
 			return true;
+		}
+		
+		/// <summary>
+		/// Handles unit death events - clears highlights if the dying unit was selected
+		/// </summary>
+		private void HandleUnitDeath(Unit dyingUnit)
+		{
+			if (dyingUnit == null) return;
+			
+			if (debugInput) Debug.Log($"[ClickInput] HandleUnitDeath called for unit {dyingUnit.UnitID}");
+			
+			// If the dying unit is our selected unit, clear selection and highlights
+			if (selectedUnit == dyingUnit)
+			{
+				if (debugInput) Debug.Log($"[ClickInput] Selected unit {dyingUnit.UnitID} died - clearing selection and highlights");
+				
+				// Clear visual highlight on the unit itself
+				SetUnitSelectionHighlight(selectedUnit, false);
+				
+				// Clear board highlights
+				Board.Instance.HideAllHighlights();
+				
+				// Clear selection state
+				selectedUnit = null;
+				
+				// Clear targeting state
+				isTargetingSkill = false;
+				pendingSkillIndex = NoSkillIndex;
+				currentSelectedSkillIndex = NoSkillIndex;
+				targetingUnit = null;
+				
+				// Clear skill bar if present
+				if (SkillBar != null) 
+				{
+					SkillBar.Clear();
+					SkillBar.SetSelectedSkillIndex(NoSkillIndex);
+				}
+				
+				// Detach any event hooks to prevent memory leaks
+				DetachUnitHighlightHooks();
+			}
+			
+			// If the dying unit is our targeting unit (but not selected unit), clear targeting
+			else if (targetingUnit == dyingUnit)
+			{
+				if (debugInput) Debug.Log($"[ClickInput] Targeting unit {dyingUnit.UnitID} died - clearing targeting state");
+				
+				isTargetingSkill = false;
+				pendingSkillIndex = NoSkillIndex;
+				targetingUnit = null;
+				
+				// Clear skill highlights but keep move highlights for selected unit if any
+				Board.Instance.ClearSkillHighlights();
+				
+				// Refresh highlights for selected unit if there is one
+				RefreshHighlightsForSelectedUnit();
+			}
+		}
+		
+		/// <summary>
+		/// Handles unit position change events - refreshes highlights if the moved unit was selected
+		/// This ensures highlights stay in sync when units move via server updates
+		/// </summary>
+		private void HandleUnitPositionChanged(Unit movedUnit)
+		{
+			if (movedUnit == null) return;
+			
+			if (debugInput) Debug.Log($"[ClickInput] HandleUnitPositionChanged called for unit {movedUnit.UnitID}");
+			
+			// If the moved unit is our selected unit, refresh highlights for the new position
+			if (selectedUnit == movedUnit)
+			{
+				if (debugInput) Debug.Log($"[ClickInput] Selected unit {movedUnit.UnitID} position changed - refreshing highlights");
+				RefreshHighlightsForSelectedUnit();
+			}
+			
+			// If the moved unit is our targeting unit, also refresh highlights
+			else if (targetingUnit == movedUnit)
+			{
+				if (debugInput) Debug.Log($"[ClickInput] Targeting unit {movedUnit.UnitID} position changed - refreshing highlights");
+				RefreshHighlightsForSelectedUnit();
+			}
 		}
 	}
 }

@@ -148,11 +148,16 @@ namespace ManaGambit
 			if (go == null) return;
 			try
 			{
+				// Enable the GameObject first to ensure all components are active
+				go.SetActive(true);
+				
 				var pss = go.GetComponentsInChildren<ParticleSystem>(true);
 				for (int i = 0; i < pss.Length; i++)
 				{
 					var ps = pss[i];
 					if (ps == null) continue;
+					// Ensure particle system is enabled and clear any previous state
+					ps.gameObject.SetActive(true);
 					ps.Clear(true);
 					ps.Play(true);
 				}
@@ -160,11 +165,34 @@ namespace ManaGambit
 				var vfx = go.GetComponentsInChildren<VisualEffect>(true);
 				for (int i = 0; i < vfx.Length; i++)
 				{
-					if (vfx[i] != null) vfx[i].Play();
+					var effect = vfx[i];
+					if (effect != null) 
+					{
+						effect.gameObject.SetActive(true);
+						effect.Play();
+					}
 				}
 #endif
+				// Also handle any Animator components
+				var animators = go.GetComponentsInChildren<Animator>(true);
+				for (int i = 0; i < animators.Length; i++)
+				{
+					var animator = animators[i];
+					if (animator != null && animator.gameObject.activeInHierarchy)
+					{
+						animator.enabled = true;
+						// Trigger play from start if it has a default state
+						if (animator.runtimeAnimatorController != null)
+						{
+							animator.Play(0, 0, 0f);
+						}
+					}
+				}
 			}
-			catch { }
+			catch (System.Exception ex) 
+			{
+				Debug.LogWarning($"[VfxManager] AutoPlay error: {ex.Message}");
+			}
 		}
 
 		public void OnUseSkill(UseSkillData use, int serverTick)
@@ -174,6 +202,34 @@ namespace ManaGambit
 			if (attacker == null) return;
 			// Remember pieceId for this attacker to handle cases where the unit lookup might be unavailable on result
 			if (!string.IsNullOrEmpty(attacker.UnitID)) attackerIdToPieceId[attacker.UnitID] = attacker.PieceId;
+			
+			// For movement-based skills, ensure unit is in proper state for VFX
+			// Server will send Move events separately, but VFX should coordinate
+			if (use.origin != null && use.target?.cell != null)
+			{
+				var origin = new Vector2Int(use.origin.x, use.origin.y);
+				var targetCell = new Vector2Int(use.target.cell.x, use.target.cell.y);
+				bool isMovementSkill = origin != targetCell && Vector2Int.Distance(origin, targetCell) > 1;
+				
+				if (isMovementSkill)
+				{
+					Debug.Log($"[VfxManager] Movement-based skill detected: {use.unitId} from {origin} to {targetCell}");
+					// Don't override server movement, but ensure unit is facing the right direction for VFX
+					try
+					{
+						var targetPos = Board.Instance.GetSlotWorldPosition(targetCell);
+						var direction = (targetPos - attacker.transform.position).normalized;
+						if (direction.sqrMagnitude > 0.001f)
+						{
+							float yaw = Mathf.Atan2(direction.x, direction.z) * Mathf.Rad2Deg;
+							var euler = attacker.transform.eulerAngles;
+							euler.y = yaw;
+							attacker.transform.eulerAngles = euler;
+						}
+					}
+					catch { }
+				}
+			}
 			var cfg = NetworkManager.Instance != null ? NetworkManager.Instance.UnitConfigAsset : null;
 			var preset = cfg != null ? GetPresetByPieceAndIndex(attacker.PieceId, Mathf.Max(0, use.skillId), cfg) : null;
 			if (preset == null) return;
@@ -188,16 +244,20 @@ namespace ManaGambit
 			int windupDurationMs = 0;
 			if (preset.WindupPolicy == SkillVfxPreset.WindupDurationPolicy.FixedMs)
 			{
-				windupDurationMs = Mathf.Max(0, preset.FixedWindupMs);
+				windupDurationMs = Mathf.Max(100, preset.FixedWindupMs); // Minimum 100ms for visibility
 			}
 			else
 			{
 				if (use.startTick > 0 && use.endWindupTick > use.startTick)
 				{
 					int dt = use.endWindupTick - use.startTick;
-					windupDurationMs = Mathf.Max(0, Mathf.RoundToInt(dt * NetworkManager.DefaultTickRateMs));
+					windupDurationMs = Mathf.Max(100, Mathf.RoundToInt(dt * NetworkManager.DefaultTickRateMs)); // Minimum 100ms
 				}
-				if (windupDurationMs <= 0) windupDurationMs = delayMs;
+				else
+				{
+					// If no server timing provided, use a reasonable default based on delay
+					windupDurationMs = Mathf.Max(200, delayMs / 2); // At least 200ms, or half the total delay
+				}
 			}
 
 			var attackerAnchors = attacker.GetComponent<UnitVfxAnchors>();
@@ -288,20 +348,22 @@ namespace ManaGambit
 				}
 			}
 
-			// Multi-shot scheduling based on UnitConfig attack.amount/interval (visual only)
+			// Multi-shot scheduling (mirror JS client simple approach)
 			int numShots = 1;
-			int shotIntervalMs = 0;
+			int shotIntervalMs = 120; // Default interval like JS client
 			try
 			{
 				if (action != null && action.attack != null)
 				{
 					numShots = Mathf.Max(1, action.attack.amount);
-					shotIntervalMs = Mathf.Max(0, action.attack.interval);
+					shotIntervalMs = Mathf.Max(50, action.attack.interval); // Minimum 50ms interval
 				}
 			}
-			catch { numShots = 1; shotIntervalMs = 0; }
+			catch { numShots = 1; shotIntervalMs = 120; }
+			
 			if (numShots > 1 && preset.ProjectilePrefab != null && projectileAnchor != null)
 			{
+				// Calculate travel time for additional shots (same as main projectile logic)
 				int travelMsExtra = 0;
 				if (preset.TravelMs > 0)
 				{
@@ -311,27 +373,29 @@ namespace ManaGambit
 				{
 					float distance = Vector3.Distance(projectileAnchor.position, targetWorldPos);
 					float seconds = Mathf.Max(MinProjectileTravelSeconds, distance / preset.ProjectileSpeedUnitsPerSec);
-					travelMsExtra = Mathf.Max(0, Mathf.RoundToInt(seconds * 1000f));
+					travelMsExtra = Mathf.Max(50, Mathf.RoundToInt(seconds * 1000f));
 				}
-				if (travelMsExtra > 0)
+				else
 				{
-					for (int s = 1; s < numShots; s++)
+					travelMsExtra = 200; // Default like main projectile
+				}
+				
+				// Schedule additional shots with simple interval timing (like JS client)
+				for (int s = 1; s < numShots; s++)
+				{
+					int shotDelay = s * shotIntervalMs;
+					ScheduleProjectileAfterDelay(projectileAnchor, targetWorldPos, preset.ProjectilePrefab, shotDelay, travelMsExtra, preset.ProjectileLookAtCamera, preset.ProjectileArcDegrees, linked.Token).Forget();
+					// Replay the skill animation for each additional shot
+					try
 					{
-						int sDelay = delayMs + (s * shotIntervalMs);
-						int launchDelayMs = Mathf.Max(0, sDelay - travelMsExtra);
-						ScheduleProjectileAfterDelay(projectileAnchor, targetWorldPos, preset.ProjectilePrefab, launchDelayMs, travelMsExtra, preset.ProjectileLookAtCamera, preset.ProjectileArcDegrees, linked.Token).Forget();
-						// Replay the skill animation for each additional shot at projectile launch time
-						try
+						var ua = attacker.GetComponent<UnitAnimator>();
+						int skillIdxForAnim = Mathf.Max(0, use.skillId);
+						if (ua != null)
 						{
-							var ua = attacker.GetComponent<UnitAnimator>();
-							int skillIdxForAnim = Mathf.Max(0, use.skillId);
-							if (ua != null)
-							{
-								UniTask.Void(async () => { try { await UniTask.Delay(launchDelayMs, cancellationToken: linked.Token); ua.PlaySkillShotNow(skillIdxForAnim); } catch { } });
-							}
+							UniTask.Void(async () => { try { await UniTask.Delay(shotDelay, cancellationToken: linked.Token); ua.PlaySkillShotNow(skillIdxForAnim); } catch { } });
 						}
-						catch { }
 					}
+					catch { }
 				}
 			}
 
@@ -512,7 +576,7 @@ namespace ManaGambit
 				StopWindup(attackerUnitId);
 			}
 
-			// Projectile (spawn even if delayMs == 0 by launching immediately)
+			// Projectile - always spawn if preset has projectile (mirror JS client behavior)
 			if (preset.ProjectilePrefab != null && projectileAnchor != null)
 			{
 				int travelMs = 0;
@@ -524,20 +588,26 @@ namespace ManaGambit
 				{
 					float distance = Vector3.Distance(projectileAnchor.position, targetWorldPos);
 					float seconds = Mathf.Max(MinProjectileTravelSeconds, distance / preset.ProjectileSpeedUnitsPerSec);
-					travelMs = Mathf.Max(0, Mathf.RoundToInt(seconds * 1000f));
+					travelMs = Mathf.Max(50, Mathf.RoundToInt(seconds * 1000f)); // Minimum 50ms like JS client
 				}
-				if (travelMs > 0)
+				else
 				{
-					if (delayMs > 0)
-					{
-						int launchDelayMs = Mathf.Max(0, delayMs - travelMs);
-						await UniTask.Delay(launchDelayMs, cancellationToken: token).SuppressCancellationThrow();
-						await PlayProjectile(projectileAnchor, targetWorldPos, preset.ProjectilePrefab, travelMs, preset.ProjectileLookAtCamera, preset.ProjectileArcDegrees, token);
-					}
-					else
-					{
-						await PlayProjectile(projectileAnchor, targetWorldPos, preset.ProjectilePrefab, travelMs, preset.ProjectileLookAtCamera, preset.ProjectileArcDegrees, token);
-					}
+					// Default travel time for instant skills (like JS client default of 200ms)
+					travelMs = 200;
+				}
+				
+				// Always spawn projectile, but time it correctly
+				if (delayMs > 0 && travelMs > 0)
+				{
+					// For skills with proper timing, launch projectile so it arrives at hitTick
+					int launchDelayMs = Mathf.Max(0, delayMs - travelMs);
+					await UniTask.Delay(launchDelayMs, cancellationToken: token).SuppressCancellationThrow();
+					await PlayProjectile(projectileAnchor, targetWorldPos, preset.ProjectilePrefab, travelMs, preset.ProjectileLookAtCamera, preset.ProjectileArcDegrees, token);
+				}
+				else
+				{
+					// For instant skills or missing timing, spawn projectile immediately with default travel
+					await PlayProjectile(projectileAnchor, targetWorldPos, preset.ProjectilePrefab, travelMs, preset.ProjectileLookAtCamera, preset.ProjectileArcDegrees, token);
 				}
 			}
 		}

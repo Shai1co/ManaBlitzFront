@@ -86,11 +86,16 @@ namespace ManaGambit
 			}
 		}
 
-		public void BindUnit(Unit unit)
+	public void BindUnit(Unit unit)
+	{
+		boundUnit = unit;
+		// If no skill is currently selected and we have a unit, default to index 0
+		if (selectedSkillIndex == -1 && unit != null)
 		{
-			boundUnit = unit;
-			Refresh();
+			selectedSkillIndex = 0;
 		}
+		Refresh();
+	}
 
 	public void SetSelectedSkillIndex(int index)
 	{
@@ -103,7 +108,17 @@ namespace ManaGambit
 		for (int i = 0; i < SkillSlotCount; i++)
 		{
 			var overlay = (slotSelectionOverlays != null && i < slotSelectionOverlays.Length) ? slotSelectionOverlays[i] : null;
-			if (overlay != null) overlay.enabled = (i == selectedSkillIndex);
+			if (overlay != null) 
+			{
+				// Only show overlay if this index matches the selected skill and the skill button is interactable
+				bool shouldShow = (i == selectedSkillIndex);
+				if (shouldShow)
+				{
+					var button = GetButton(i);
+					shouldShow = button != null && button.interactable;
+				}
+				overlay.enabled = shouldShow;
+			}
 		}
 	}
 

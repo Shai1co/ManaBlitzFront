@@ -1,6 +1,7 @@
 
 using System.Collections.Generic;
 using UnityEngine;
+using UnityEngine.SceneManagement;
 
 namespace ManaGambit
 {
@@ -19,7 +20,10 @@ namespace ManaGambit
             }
             Instance = this;
         }
-
+        public void RestartScene()
+        {
+            SceneManager.LoadScene(SceneManager.GetActiveScene().name);
+        }
         public void RegisterUnit(Unit unit, string id)
         {
             if (string.IsNullOrEmpty(id))
