@@ -2,6 +2,7 @@
 using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.SceneManagement;
+using Cysharp.Threading.Tasks;
 
 namespace ManaGambit
 {
@@ -22,7 +23,48 @@ namespace ManaGambit
         }
         public void RestartScene()
         {
-            SceneManager.LoadScene(SceneManager.GetActiveScene().name);
+            RestartSceneAsync().Forget();
+        }
+        public async UniTask RestartSceneAsync()
+        {
+            try
+            {
+                // Clear singleton state before reload to avoid stale data
+                ClearUnits();
+                
+                var sceneName = SceneManager.GetActiveScene().name;
+                
+                // Start async scene load
+                var asyncOp = SceneManager.LoadSceneAsync(sceneName);
+                
+                if (asyncOp == null)
+                {
+                    Debug.LogError($"[GameManager] Failed to initiate async scene load for '{sceneName}'");
+                    return;
+                }
+                
+                // Optionally prevent scene activation until ready
+                // asyncOp.allowSceneActivation = false;
+                
+                // Wait for scene to complete loading
+                await asyncOp.ToUniTask();
+                
+                if (asyncOp.isDone)
+                {
+                    Debug.Log($"[GameManager] Scene '{sceneName}' reloaded successfully");
+                }
+                else
+                {
+                    Debug.LogError($"[GameManager] Scene '{sceneName}' failed to load properly");
+                    // Scene reload failed - could implement fallback behavior here
+                }
+            }
+            catch (System.Exception e)
+            {
+                Debug.LogError($"[GameManager] Error during scene restart: {e.Message}\nStack trace: {e.StackTrace}");
+                // Restore safe state - reinitialize critical components
+                ClearUnits();
+            }
         }
         public void RegisterUnit(Unit unit, string id)
         {
@@ -64,7 +106,7 @@ namespace ManaGambit
             units.Remove(unitId);
         }
 
-        public void ExecuteCommand(string unitID, string command, int x = -1, int y = -1)
+        public async UniTask ExecuteCommand(string unitID, string command, int x = -1, int y = -1)
         {
             if (!units.TryGetValue(unitID, out var unit))
             {
@@ -77,7 +119,7 @@ namespace ManaGambit
                 case "move":
                     if (x >= 0 && y >= 0)
                     {
-                        unit.Move(x, y);
+                        await unit.Move(x, y);
                     }
                     else
                     {

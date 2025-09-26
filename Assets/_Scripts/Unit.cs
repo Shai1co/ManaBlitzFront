@@ -28,6 +28,9 @@ namespace ManaGambit
         [SerializeField] private string pieceId = "";
         [SerializeField] private string ownerId = "";
 
+        // Cached HighlightEffect component to avoid repeated GetComponent calls
+        private HighlightEffect cachedHighlightEffect;
+
         private CancellationTokenSource moveCts;
         private CancellationTokenSource _actionCts;
         private CancellationTokenSource _deathCts;
@@ -44,13 +47,13 @@ namespace ManaGambit
         public event Action<Unit> OnMoveCompleted;
         public event Action<Unit> OnSkillStarted;
         public event Action<Unit> OnSkillCompleted;
-        
+
         // Static event for unit death notification - allows ClickInput to clear highlights when selected unit dies
         public static event Action<Unit> OnUnitDied;
-        
+
         // Static event for unit position changes - allows ClickInput to refresh highlights when selected unit moves via server
         public static event Action<Unit> OnUnitPositionChanged;
-        
+
         /// <summary>
         /// Public method to trigger unit death event - used by external systems like NetworkManager during board resets
         /// </summary>
@@ -89,14 +92,14 @@ namespace ManaGambit
         {
             ownerId = id;
         }
-        
+
         /// <summary>
         /// Parse server animation state string to UnitState enum
         /// </summary>
         private UnitState ParseAnimationState(string animState)
         {
             if (string.IsNullOrEmpty(animState)) return UnitState.Idle;
-            
+
             return animState.ToLowerInvariant() switch
             {
                 "idle" => UnitState.Idle,
@@ -126,6 +129,13 @@ namespace ManaGambit
             {
                 Debug.LogWarning($"{name} missing UnitAnimator component");
             }
+
+            // Cache HighlightEffect component
+            cachedHighlightEffect = GetComponent<HighlightEffect>();
+            if (cachedHighlightEffect == null)
+            {
+                cachedHighlightEffect = GetComponentInChildren<HighlightEffect>(true);
+            }
         }
 
         public async UniTask Move(int x, int y)
@@ -140,8 +150,8 @@ namespace ManaGambit
 
         public async UniTask MoveTo(Vector2Int target, float durationSeconds, float initialProgress, string moveType = "Normal")
         {
-            Debug.Log($"{name} MoveTo {target} duration={durationSeconds} initialProgress={initialProgress} moveType={moveType} - Transform movement only (server controls animation state)");
-
+            Debug.Log($"💫 {name} MoveTo {target} duration={durationSeconds} initialProgress={initialProgress} moveType={moveType}");
+            Debug.Log($"🎯 Movement: {transform.position} → {Board.Instance.GetSlotWorldPosition(target)}");
             if (moveCts != null)
             {
                 moveCts.Cancel();
@@ -320,24 +330,24 @@ namespace ManaGambit
         {
             if (use == null) return;
             OnSkillStarted?.Invoke(this);
-            
+
             // Determine target and handle movement-based skills
             var targetCell = use.target != null && use.target.cell != null ? new Vector2Int(use.target.cell.x, use.target.cell.y) : currentPosition;
             var targetWorldPos = Board.Instance.GetSlotWorldPosition(targetCell);
-            
+
             // Check if this is a movement-based skill (like leap attack)
             bool isMovementSkill = false;
             if (use.origin != null)
             {
                 var origin = new Vector2Int(use.origin.x, use.origin.y);
                 isMovementSkill = origin != targetCell && Vector2Int.Distance(origin, targetCell) > 1;
-                
+
                 if (isMovementSkill)
                 {
                     Debug.Log($"[Unit] Movement-based skill: {unitID} from {origin} to {targetCell} - server will handle positioning");
                 }
             }
-            
+
             // Face the target (important for both regular and movement skills)
             transform.LookAt(targetWorldPos);
 
@@ -377,10 +387,10 @@ namespace ManaGambit
                     {
                         _actionCts = new CancellationTokenSource();
                     }
-                    
+
                     // Create linked token for both destroy and manual cancellation
                     using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(this.GetCancellationTokenOnDestroy(), _actionCts.Token);
-                    
+
                     await UniTask.Delay(hitDelayMs, cancellationToken: linkedCts.Token);
                 }
                 catch (OperationCanceledException)
@@ -403,23 +413,23 @@ namespace ManaGambit
                 moveCts.Dispose();
                 moveCts = null;
             }
-            
+
             if (_actionCts != null)
             {
                 _actionCts.Cancel();
                 _actionCts.Dispose();
                 _actionCts = null;
             }
-            
+
             if (_deathCts != null)
             {
                 _deathCts.Cancel();
                 _deathCts.Dispose();
                 _deathCts = null;
             }
-            
+
             Debug.Log($"{name} stopped");
-            
+
             // Only set state to Idle if not dead
             if (!isDead)
             {
@@ -460,42 +470,41 @@ namespace ManaGambit
             catch { /* ignore icon errors */ }
         }
 
-		public void ShowDamageNumber(int amount)
-		{
-			try
-			{
-				var pos = transform.position + Vector3.up * damageNumberHeightOffset;
-				// Preferred: use assigned prefab field if present (doesn't need to be a child)
-				var assignedField = damageNumberPrefab;
-				if (assignedField != null)
-				{
-					assignedField.Spawn(pos, (float)amount);
-				}
-				else
-				{
-					// Fallback: find a DamageNumber in children
-					var prefab = GetComponentInChildren<DamageNumbersPro.DamageNumber>(true);
-					if (prefab != null)
-					{
-						prefab.Spawn(pos, (float)amount);
-					}
-				}
-			}
-			catch { }
-		}
+        public void ShowDamageNumber(int amount)
+        {
+            try
+            {
+                var pos = transform.position + Vector3.up * damageNumberHeightOffset;
+                // Preferred: use assigned prefab field if present (doesn't need to be a child)
+                var assignedField = damageNumberPrefab;
+                if (assignedField != null)
+                {
+                    assignedField.Spawn(pos, (float)amount);
+                }
+                else
+                {
+                    // Fallback: find a DamageNumber in children
+                    var prefab = GetComponentInChildren<DamageNumbersPro.DamageNumber>(true);
+                    if (prefab != null)
+                    {
+                        prefab.Spawn(pos, (float)amount);
+                    }
+                }
+            }
+            catch { }
+        }
 
-		public void PlayHitFlash()
-		{
-			try
-			{
-				var hp = GetComponent<HighlightEffect>();
-				if (hp != null)
-				{
-					hp.HitFX();
-				}
-			}
-			catch { }
-		}
+        public void PlayHitFlash()
+        {
+            try
+            {
+                if (cachedHighlightEffect != null)
+                {
+                    cachedHighlightEffect.HitFX();
+                }
+            }
+            catch { }
+        }
 
         public void ShowEphemeralText(string key)
         {
@@ -543,7 +552,7 @@ namespace ManaGambit
             currentHp = Mathf.Clamp(data.hp, 0, Mathf.Max(1, maxHp));
             ApplyHpUpdate(currentHp);
             currentMana = data.mana;
-            
+
             // Apply server-provided animation state
             if (!string.IsNullOrEmpty(data.animState))
             {
@@ -553,7 +562,7 @@ namespace ManaGambit
             }
             // TODO: Update UI or other components with hp/mana
         }
-        
+
         /// <summary>
         /// Apply server data update including position, HP, and animation state
         /// </summary>
@@ -561,7 +570,7 @@ namespace ManaGambit
         {
             var currentPos = CurrentPosition;
             var newPos = new Vector2Int(data.pos.x, data.pos.y);
-            
+
             // Handle position changes
             if (currentPos != newPos)
             {
@@ -569,7 +578,7 @@ namespace ManaGambit
                 currentPosition = newPos;
                 transform.position = Board.Instance.GetSlotWorldPosition(newPos);
                 Debug.Log($"{name} ApplyServerDataUpdate: Position changed from {currentPos} to {newPos}");
-                
+
                 // Notify systems that this unit's position changed (for highlight refresh)
                 try
                 {
@@ -580,13 +589,13 @@ namespace ManaGambit
                     Debug.LogWarning($"{name} error notifying unit position change listeners: {e.Message}");
                 }
             }
-            
+
             // Apply HP update
             ApplyHpUpdate(data.hp);
-            
+
             // Apply mana update
             currentMana = data.mana;
-            
+
             // Apply server-provided animation state (most important for sync)
             if (!string.IsNullOrEmpty(data.animState))
             {
@@ -607,8 +616,8 @@ namespace ManaGambit
                 if (icons == null) icons = GetComponentInChildren<UnitStatusIcons>(true);
                 if (icons != null)
                 {
-            bool isOwn = AuthManager.Instance?.UserId != null && 
-                        string.Equals(ownerId, AuthManager.Instance.UserId, StringComparison.Ordinal);
+                    bool isOwn = AuthManager.Instance?.UserId != null &&
+                                string.Equals(ownerId, AuthManager.Instance.UserId, StringComparison.Ordinal);
                     icons.SetHp(currentHp, Mathf.Max(1, maxHp), isOwn);
                 }
             }
@@ -619,12 +628,10 @@ namespace ManaGambit
             {
                 try
                 {
-                    var hp = GetComponent<HighlightEffect>();
-                    if (hp == null) hp = GetComponentInChildren<HighlightEffect>(true);
-                    if (hp != null)
+                    if (cachedHighlightEffect != null)
                     {
                         // Use Highlight Plus HitFX with specified initial intensity
-                        hp.HitFX(Color.white, HitFxFadeOutSeconds, HitFxInitialIntensity);
+                        cachedHighlightEffect.HitFX(Color.white, HitFxFadeOutSeconds, HitFxInitialIntensity);
                     }
                 }
                 catch { }
@@ -657,7 +664,7 @@ namespace ManaGambit
 
         public void Die()
         {
-            if (isDead) 
+            if (isDead)
             {
                 Debug.Log($"{name} is already dead, ignoring Die() call");
                 return;
@@ -728,7 +735,7 @@ namespace ManaGambit
             {
                 _deathCts = new CancellationTokenSource();
                 using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(
-                    this.GetCancellationTokenOnDestroy(), 
+                    this.GetCancellationTokenOnDestroy(),
                     _deathCts.Token);
                 var linkedToken = linkedCts.Token;
 
@@ -744,7 +751,7 @@ namespace ManaGambit
                 {
                     GameManager.Instance.UnregisterUnit(unitID);
                 }
-                
+
                 // CRITICAL FIX: Clean up skill tracking in NetworkManager to prevent memory leaks
                 if (NetworkManager.Instance != null && !string.IsNullOrEmpty(unitID))
                 {
@@ -766,6 +773,39 @@ namespace ManaGambit
 
         public bool IsDead => isDead;
 
+        /// <summary>
+        /// Get the cached HighlightEffect component
+        /// </summary>
+        public HighlightEffect GetHighlightEffect()
+        {
+            return cachedHighlightEffect;
+        }
+
+        /// <summary>
+        /// Set selection highlight only if this unit is owned by the local player
+        /// </summary>
+        public void SetSelectionHighlight(bool highlighted)
+        {
+            // Only allow highlighting for player-owned units
+            bool isOwn = AuthManager.Instance != null &&
+                        string.Equals(ownerId, AuthManager.Instance.UserId, StringComparison.Ordinal);
+
+            if (!isOwn)
+            {
+                // Enemy units should never be highlighted for selection
+                if (highlighted)
+                {
+                    Debug.LogWarning($"[Unit] Attempted to highlight enemy unit {name} (owner: {ownerId}) - ignoring");
+                }
+                return;
+            }
+
+            if (cachedHighlightEffect != null)
+            {
+                cachedHighlightEffect.SetHighlighted(highlighted);
+            }
+        }
+
         private void OnDestroy()
         {
             // If unit is being destroyed without going through Die(), still notify death event
@@ -780,13 +820,13 @@ namespace ManaGambit
                     Debug.LogWarning($"{name} error notifying unit death listeners in OnDestroy: {e.Message}");
                 }
             }
-            
+
             // CRITICAL FIX: Clean up skill tracking in NetworkManager to prevent memory leaks
             if (NetworkManager.Instance != null && !string.IsNullOrEmpty(unitID))
             {
                 NetworkManager.Instance.CleanupUnitSkillTracking(unitID);
             }
-            
+
             // Ensure proper cleanup of cancellation token sources
             if (moveCts != null)
             {
@@ -794,14 +834,14 @@ namespace ManaGambit
                 moveCts.Dispose();
                 moveCts = null;
             }
-            
+
             if (_actionCts != null)
             {
                 _actionCts.Cancel();
                 _actionCts.Dispose();
                 _actionCts = null;
             }
-            
+
             if (_deathCts != null)
             {
                 _deathCts.Cancel();

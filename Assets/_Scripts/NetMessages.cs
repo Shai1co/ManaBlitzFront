@@ -192,10 +192,30 @@ namespace ManaGambit
 	}
 
 	[Serializable]
+	public class GameOverUserStats
+	{
+		public string userId;
+		public string result; // "win", "loss", "draw"
+		public PlayerStatChange elo;
+		public PlayerStatChange xp;
+		public PlayerStatChange level;
+	}
+
+	[Serializable]
+	public class PlayerStatChange
+	{
+		public float before;
+		public float after;
+	}
+
+	[Serializable]
 	public class GameOverData
 	{
 		public int reason;
 		public string winnerUserId;
+		public string loserUserId;
+		public int serverTick;
+		public GameOverUserStats[] users;
 	}
 
 	[Serializable]

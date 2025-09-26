@@ -39,6 +39,8 @@ namespace ManaGambit
 		private Unit highlightHookUnit; // unit we've attached highlight event hooks to
 		// Guard to prevent duplicate highlight redraws in the same frame
 		private static readonly ManaGambit.OncePerFrameGate<Unit> _redrawGate = new ManaGambit.OncePerFrameGate<Unit>();
+		// Flag to prevent recursive unit/slot click handling
+		private bool _isProcessingCombinedClick = false;
 
 		private void Awake()
 		{
@@ -115,192 +117,211 @@ namespace ManaGambit
 				Debug.Log($"[ClickInput] Press at {pointerPos}, overUI={IsPointerOverUI()}");
 			}
 
-			// 1) Try select a unit first
+			// Prevent recursive combined click handling
+			if (_isProcessingCombinedClick)
+			{
+				return;
+			}
+
+			// Determine what was clicked
+			Unit clickedUnit = null;
+			Transform clickedSlot = null;
+			bool clickedOnSlotWithUnit = false;
+
+			// 1) Check for unit click (try unit layer first)
 			if (Physics.Raycast(ray, out RaycastHit unitHit, RaycastMaxDistance, unitLayer, QueryTriggerInteraction.Collide))
 			{
-				var unit = unitHit.collider.GetComponentInParent<Unit>();
+				clickedUnit = unitHit.collider.GetComponentInParent<Unit>();
 				if (debugInput)
 				{
-					Debug.Log($"[ClickInput] Unit hit '{unitHit.collider.name}' layer={unitHit.collider.gameObject.layer} unit={(unit!=null)}");
+					Debug.Log($"[ClickInput] Unit hit '{unitHit.collider.name}' layer={unitHit.collider.gameObject.layer} unit={(clickedUnit!=null)}");
 				}
-				if (unit != null)
-				{
-					// Never outline enemies upon click
-					bool isOwnRelativeToLocal = AuthManager.Instance != null && string.Equals(unit.OwnerId, AuthManager.Instance.UserId);
-					if (!isOwnRelativeToLocal)
-					{
-						SetUnitSelectionHighlight(unit, false);
-					}
-					// If targeting a skill and clicked an enemy unit that is a valid target, cast instead of selecting
-					if (isTargetingSkill && targetingUnit != null)
-					{
-						if (TryExecuteSkillOnUnit(targetingUnit, unit, pendingSkillIndex))
-						{
-						isTargetingSkill = false;
-						pendingSkillIndex = NoSkillIndex;
-						// Clear both move and skill highlights on cast start
-						Board.Instance.ClearMoveHighlights();
-						Board.Instance.ClearSkillHighlights();
-						// Keep skill selected after use for consistency
-						if (SkillBar != null) SkillBar.SetSelectedSkillIndex(currentSelectedSkillIndex);
-							// Restore move/skill previews after the skill completes
-							void RestoreAfterSkill(Unit u)
-							{
-								u.OnSkillCompleted -= RestoreAfterSkill;
-								if (selectedUnit != null && NetworkManager.Instance != null && NetworkManager.Instance.UnitConfigAsset != null)
-								{
-									var legal = LocalTargeting.ComputeMoveTargets(selectedUnit, NetworkManager.Instance.UnitConfigAsset);
-									Board.Instance.HighlightSlots(legal, true);
-									var skillTargets = LocalTargeting.ComputeAttackTargets(selectedUnit, NetworkManager.Instance.UnitConfigAsset, currentSelectedSkillIndex);
-									Board.Instance.HighlightSkillSlots(skillTargets, true);
-								}
-							}
-							targetingUnit.OnSkillCompleted += RestoreAfterSkill;
-							return;
-						}
-					}
-					// If not explicitly targeting a skill, mirror JS: use default skill (index 0) on enemy click when valid
-					if (!isTargetingSkill && selectedUnit != null)
-					{
-						const int defaultSkillIndex = 0;
-						if (TryExecuteSkillOnUnit(selectedUnit, unit, defaultSkillIndex))
-						{
-							return;
-						}
-					}
-					HandleUnitClick(unit);
-				}
-				return; // done handling this click
 			}
 
 			// Fallback: try any layer for Unit if layer mask misconfigured
-			if (Physics.Raycast(ray, out RaycastHit anyUnitHit, RaycastMaxDistance, ~0, QueryTriggerInteraction.Collide))
+			if (clickedUnit == null && Physics.Raycast(ray, out RaycastHit anyUnitHit, RaycastMaxDistance, ~0, QueryTriggerInteraction.Collide))
 			{
-				var unitAny = anyUnitHit.collider.GetComponentInParent<Unit>();
-				if (unitAny != null)
+				clickedUnit = anyUnitHit.collider.GetComponentInParent<Unit>();
+				if (clickedUnit != null && debugInput)
 				{
-					if (debugInput) Debug.LogWarning($"[ClickInput] Unit was not on unitLayer; using fallback hit '{anyUnitHit.collider.name}' on layer {anyUnitHit.collider.gameObject.layer}");
-					// Never outline enemies upon click (fallback path)
-					bool isOwnRelativeToLocal = AuthManager.Instance != null && string.Equals(unitAny.OwnerId, AuthManager.Instance.UserId);
-					if (!isOwnRelativeToLocal)
-					{
-						SetUnitSelectionHighlight(unitAny, false);
-					}
-					HandleUnitClick(unitAny);
-					return;
+					Debug.LogWarning($"[ClickInput] Unit was not on unitLayer; using fallback hit '{anyUnitHit.collider.name}' on layer {anyUnitHit.collider.gameObject.layer}");
 				}
 			}
 
-			// 2) If targeting a skill, interpret slot click as skill target
-			if (isTargetingSkill && Physics.Raycast(ray, out RaycastHit skillSlotHit, RaycastMaxDistance, slotLayer, QueryTriggerInteraction.Collide))
+			// 2) Check for slot click
+			if (Physics.Raycast(ray, out RaycastHit slotHit, RaycastMaxDistance, slotLayer, QueryTriggerInteraction.Collide))
 			{
-				var slot = skillSlotHit.collider.transform;
-				if (TryIssueSkillAtSlot(slot)) { return; }
-			}
-
-			// Fallback: try any layer for slot when targeting a skill
-			if (isTargetingSkill && Physics.Raycast(ray, out RaycastHit anySkillSlotHit, RaycastMaxDistance, ~0, QueryTriggerInteraction.Collide))
-			{
-				var slotTransform = anySkillSlotHit.collider.transform;
-				if (!Board.Instance.TryGetCoord(slotTransform, out var _))
-				{
-					var boardSlot = anySkillSlotHit.collider.GetComponentInParent<BoardSlot>();
-					if (boardSlot != null) slotTransform = boardSlot.transform;
-				}
-				if (TryIssueSkillAtSlot(slotTransform))
-				{
-					if (debugInput) Debug.LogWarning($"[ClickInput] (Targeting) Slot was not on slotLayer; using fallback hit '{anySkillSlotHit.collider.name}'");
-					return;
-				}
-			}
-
-			// 3) If a unit is selected, try issue a move by clicking a slot OR select unit if slot is occupied
-			if (selectedUnit != null && Physics.Raycast(ray, out RaycastHit slotHit, RaycastMaxDistance, slotLayer, QueryTriggerInteraction.Collide))
-			{
-				var slot = slotHit.collider.transform;
+				clickedSlot = slotHit.collider.transform;
 				if (debugInput)
 				{
 					Debug.Log($"[ClickInput] Slot hit '{slotHit.collider.name}' layer={slotHit.collider.gameObject.layer}");
 				}
-				
-				// Check if slot is occupied by a unit - if so, select that unit instead
-				if (Board.Instance.TryGetCoord(slot, out var slotCoord))
+
+				// Check if this slot contains a unit
+				if (Board.Instance.TryGetCoord(clickedSlot, out var slotCoord))
 				{
 					if (Board.Instance.TryGetBoardSlot(slotCoord, out var boardSlot) && boardSlot.IsOccupied)
 					{
 						var occupantUnit = boardSlot.Occupant;
 						if (occupantUnit != null)
 						{
-							HandleUnitClick(occupantUnit);
-							return;
+							clickedOnSlotWithUnit = true;
+							// If we haven't found a unit yet, use this one
+							if (clickedUnit == null)
+							{
+								clickedUnit = occupantUnit;
+							}
 						}
 					}
 				}
-				
-				// If not explicitly targeting a skill, allow default/basic skill (index 0) by clicking a valid red-highlighted slot
-				if (!isTargetingSkill && TryExecuteDefaultSkillOnSlot(slot, selectedUnit)) { return; }
-				if (TryIssueMoveToSlot(slot)) { return; }
-				return;
 			}
 
-			// Fallback: try any layer for slot when a unit is selected
-			if (selectedUnit != null && Physics.Raycast(ray, out RaycastHit anySlotHit, RaycastMaxDistance, ~0, QueryTriggerInteraction.Collide))
+			// Fallback: try any layer for slot
+			if (clickedSlot == null && Physics.Raycast(ray, out RaycastHit anySlotHit, RaycastMaxDistance, ~0, QueryTriggerInteraction.Collide))
 			{
-				var slotTransform = anySlotHit.collider.transform;
+				clickedSlot = anySlotHit.collider.transform;
 				// Try parent BoardSlot if direct transform doesn't map
-				if (!Board.Instance.TryGetCoord(slotTransform, out var _))
+				if (!Board.Instance.TryGetCoord(clickedSlot, out var _))
 				{
 					var boardSlot = anySlotHit.collider.GetComponentInParent<BoardSlot>();
-					if (boardSlot != null) slotTransform = boardSlot.transform;
+					if (boardSlot != null) clickedSlot = boardSlot.transform;
 				}
-				
-				// Check if slot is occupied by a unit - if so, select that unit instead
-				if (Board.Instance.TryGetCoord(slotTransform, out var slotCoord))
+
+				// Check if this slot contains a unit
+				if (Board.Instance.TryGetCoord(clickedSlot, out var slotCoord))
 				{
 					if (Board.Instance.TryGetBoardSlot(slotCoord, out var boardSlot) && boardSlot.IsOccupied)
 					{
 						var occupantUnit = boardSlot.Occupant;
 						if (occupantUnit != null)
 						{
-							HandleUnitClick(occupantUnit);
-							if (debugInput) Debug.LogWarning($"[ClickInput] Slot was not on slotLayer; using fallback hit '{anySlotHit.collider.name}' to select unit");
-							return;
+							clickedOnSlotWithUnit = true;
+							// If we haven't found a unit yet, use this one
+							if (clickedUnit == null)
+							{
+								clickedUnit = occupantUnit;
+							}
 						}
 					}
 				}
-				
-				// If not explicitly targeting a skill, allow default/basic skill (index 0) by clicking a valid red-highlighted slot
-				if (!isTargetingSkill && TryExecuteDefaultSkillOnSlot(slotTransform, selectedUnit)) { return; }
-				if (TryIssueMoveToSlot(slotTransform))
+
+				if (clickedSlot != null && debugInput)
 				{
-					if (debugInput) Debug.LogWarning($"[ClickInput] Slot was not on slotLayer; using fallback hit '{anySlotHit.collider.name}'");
-					return;
+					Debug.LogWarning($"[ClickInput] Slot was not on slotLayer; using fallback hit '{anySlotHit.collider.name}'");
 				}
 			}
 
-			// 4) Otherwise, clear or cancel depending on context
-			if (debugInput)
+			// 3) Handle the combined click logic
+			_isProcessingCombinedClick = true;
+			try
 			{
-				if (Physics.Raycast(ray, out var anyHit, RaycastMaxDistance, ~0))
+				HandleCombinedClick(clickedUnit, clickedSlot, clickedOnSlotWithUnit);
+			}
+			finally
+			{
+				_isProcessingCombinedClick = false;
+			}
+		}
+
+		private void HandleCombinedClick(Unit clickedUnit, Transform clickedSlot, bool clickedOnSlotWithUnit)
+		{
+			bool handled = false;
+
+			// Handle unit click logic first (selection, skill casting on enemy units, etc.)
+			if (clickedUnit != null)
+			{
+				// If targeting a skill and clicked an enemy unit that is a valid target, cast instead of selecting
+				if (isTargetingSkill && targetingUnit != null)
 				{
-					Debug.Log($"[ClickInput] Missed masks; actually hit '{anyHit.collider.name}' on layer {anyHit.collider.gameObject.layer}");
+					if (TryExecuteSkillOnUnit(targetingUnit, clickedUnit, pendingSkillIndex))
+					{
+						isTargetingSkill = false;
+						pendingSkillIndex = currentSelectedSkillIndex; // CONSISTENCY FIX: Keep skill selected by preserving selection state
+						// Clear both move and skill highlights on cast start
+						Board.Instance.ClearMoveHighlights();
+						Board.Instance.ClearSkillHighlights();
+						// Keep skill selected after use for consistency - now all state variables are in sync
+						if (SkillBar != null) SkillBar.SetSelectedSkillIndex(currentSelectedSkillIndex);
+						// Restore move/skill previews after the skill completes
+						void RestoreAfterSkill(Unit u)
+						{
+							u.OnSkillCompleted -= RestoreAfterSkill;
+							if (selectedUnit != null && NetworkManager.Instance != null && NetworkManager.Instance.UnitConfigAsset != null)
+							{
+								var legal = LocalTargeting.ComputeMoveTargets(selectedUnit, NetworkManager.Instance.UnitConfigAsset);
+								Board.Instance.HighlightSlots(legal, true);
+								var skillTargets = LocalTargeting.ComputeAttackTargets(selectedUnit, NetworkManager.Instance.UnitConfigAsset, currentSelectedSkillIndex);
+								Board.Instance.HighlightSkillSlots(skillTargets, true);
+							}
+						}
+						targetingUnit.OnSkillCompleted += RestoreAfterSkill;
+						return;
+					}
+				}
+				// If not explicitly targeting a skill, mirror JS: use default skill (index 0) on enemy click when valid
+				if (!isTargetingSkill && selectedUnit != null)
+				{
+					const int defaultSkillIndex = 0;
+					if (TryExecuteSkillOnUnit(selectedUnit, clickedUnit, defaultSkillIndex))
+					{
+						return;
+					}
+				}
+				// Handle unit selection - skip for enemy units to allow slot logic to run
+				bool isOwn = AuthManager.Instance != null && string.Equals(clickedUnit.OwnerId, AuthManager.Instance.UserId);
+				if (isOwn)
+				{
+					HandleUnitClick(clickedUnit);
+					handled = true;
 				}
 				else
 				{
-					Debug.Log("[ClickInput] Raycast hit nothing. Check camera/colliders/layers.");
+					if (debugInput) Debug.Log("[ClickInput] Clicked enemy unit; skipping unit selection but allowing slot logic to run.");
+					// Don't set handled = true, so slot logic can still run
 				}
 			}
-			if (isTargetingSkill && cancelTargetingOnMiss)
+
+			// Handle slot click logic (skill targeting, movement, etc.)
+			if (clickedSlot != null)
+			{
+				// If targeting a skill, interpret slot click as skill target
+				if (isTargetingSkill && TryIssueSkillAtSlot(clickedSlot))
+				{
+					return;
+				}
+
+				// If a unit is selected and slot is empty, try move or default skill
+				if (selectedUnit != null && !clickedOnSlotWithUnit)
+				{
+					// If not explicitly targeting a skill, allow default/basic skill (index 0) by clicking a valid red-highlighted slot
+					if (!isTargetingSkill && TryExecuteDefaultSkillOnSlot(clickedSlot, selectedUnit))
+					{
+						return;
+					}
+					if (TryIssueMoveToSlot(clickedSlot))
+					{
+						return;
+					}
+				}
+			}
+
+			// If nothing was handled and we were targeting a skill, cancel targeting on miss
+			if (!handled && isTargetingSkill && cancelTargetingOnMiss)
 			{
 				if (debugInput) Debug.Log("[ClickInput] Cancel targeting on miss (keeping unit selected)");
 				isTargetingSkill = false;
-				pendingSkillIndex = NoSkillIndex;
+				pendingSkillIndex = currentSelectedSkillIndex; // CONSISTENCY FIX: Preserve selection state even when canceling targeting
 				Board.Instance.ClearSkillHighlights();
-				// Keep the unit selected; do not clear selection/highlights fully
+				// Keep the unit and skill selected; do not clear selection/highlights fully
+				if (SkillBar != null) SkillBar.SetSelectedSkillIndex(currentSelectedSkillIndex);
 				return;
 			}
-			// Do not auto-deselect unit on miss; mirror JS behavior of persistent selection
-			if (debugInput) Debug.Log("[ClickInput] Miss with no selection change; keeping current selection");
+
+			// If nothing was handled, log debug info
+			if (!handled && debugInput)
+			{
+				Debug.Log("[ClickInput] Combined click handled nothing; keeping current selection");
+			}
 		}
 
 		private void HandleValidTargets(ValidTargetsEvent evt)
@@ -395,7 +416,7 @@ namespace ManaGambit
 		}
 		}
 
-		private void RefreshHighlightsForSelectedUnit()
+		public void RefreshHighlightsForSelectedUnit()
 		{
 			if (selectedUnit == null)
 			{
@@ -609,8 +630,8 @@ namespace ManaGambit
 				Board.Instance.ClearSkillHighlights();
 			// Keep unit selected; exit explicit targeting state but maintain selected skill
 			isTargetingSkill = false;
-			pendingSkillIndex = NoSkillIndex;
-			// Keep currentSelectedSkillIndex unchanged so skill remains selected after use
+			pendingSkillIndex = currentSelectedSkillIndex; // CONSISTENCY FIX: Keep skill selected by preserving selection state
+			// Keep currentSelectedSkillIndex unchanged so skill remains selected after use - now all state variables are in sync
 			if (SkillBar != null) SkillBar.SetSelectedSkillIndex(currentSelectedSkillIndex);
 				// Subscribe to restore overlays after skill completes
 				void RestoreAfterSkill(Unit u)
@@ -718,15 +739,13 @@ namespace ManaGambit
 		}
 		return EventSystem.current.IsPointerOverGameObject();
 	}
-		private static void SetUnitSelectionHighlight(Unit unit, bool highlighted)
-		{
-			if (unit == null) return;
-			
-			var effect = unit.GetComponentInChildren<HighlightEffect>(true);
-			if (effect == null) return;
-			
-			effect.SetHighlighted(highlighted);
-		}
+	private static void SetUnitSelectionHighlight(Unit unit, bool highlighted)
+	{
+		if (unit == null) return;
+		
+		// Use the Unit's new method which includes ownership checks
+		unit.SetSelectionHighlight(highlighted);
+	}
 
 		private bool TryExecuteSkillOnUnit(Unit caster, Unit target, int skillIndex)
 		{
@@ -748,8 +767,6 @@ namespace ManaGambit
 
 			if (skillTargets.Contains(targetCell))
 			{
-				// Ensure enemies are not outlined when targeted/attacked
-				SetUnitSelectionHighlight(target, false);
 				// Guard: ensure caster has valid UnitID and IntentManager is available
 				if (string.IsNullOrEmpty(caster.UnitID))
 				{
@@ -816,7 +833,8 @@ namespace ManaGambit
 		}
 		
 		/// <summary>
-		/// Handles unit death events - clears highlights if the dying unit was selected
+		/// Handles unit death events - clears highlights if the dying unit was selected,
+		/// or refreshes highlights if any unit dies while another unit is selected
 		/// </summary>
 		private void HandleUnitDeath(Unit dyingUnit)
 		{
@@ -858,23 +876,36 @@ namespace ManaGambit
 			// If the dying unit is our targeting unit (but not selected unit), clear targeting
 			else if (targetingUnit == dyingUnit)
 			{
-				if (debugInput) Debug.Log($"[ClickInput] Targeting unit {dyingUnit.UnitID} died - clearing targeting state");
+				if (debugInput) Debug.Log($"[ClickInput] Targeting unit {dyingUnit.UnitID} died - clearing targeting state but preserving skill selection");
 				
 				isTargetingSkill = false;
-				pendingSkillIndex = NoSkillIndex;
+				pendingSkillIndex = currentSelectedSkillIndex; // CONSISTENCY FIX: Preserve selection state even when target dies
 				targetingUnit = null;
 				
 				// Clear skill highlights but keep move highlights for selected unit if any
 				Board.Instance.ClearSkillHighlights();
 				
+				// Ensure SkillBar stays in sync with preserved selection
+				if (SkillBar != null) SkillBar.SetSelectedSkillIndex(currentSelectedSkillIndex);
+				
 				// Refresh highlights for selected unit if there is one
+				RefreshHighlightsForSelectedUnit();
+			}
+			
+			// CRITICAL FIX: If ANY other unit dies while we have a unit selected, refresh highlights
+			// This handles enemy unit deaths that could affect targeting for the selected player unit
+			else if (selectedUnit != null)
+			{
+				if (debugInput) Debug.Log($"[ClickInput] Unit {dyingUnit.UnitID} died while {selectedUnit.UnitID} is selected - refreshing highlights for board changes");
+				
+				// Enemy unit death might open up movement paths or change skill targets
 				RefreshHighlightsForSelectedUnit();
 			}
 		}
 		
 		/// <summary>
-		/// Handles unit position change events - refreshes highlights if the moved unit was selected
-		/// This ensures highlights stay in sync when units move via server updates
+		/// Handles unit position change events - refreshes highlights if the moved unit was selected,
+		/// or refreshes highlights if any unit moves while another unit is selected
 		/// </summary>
 		private void HandleUnitPositionChanged(Unit movedUnit)
 		{
@@ -893,6 +924,16 @@ namespace ManaGambit
 			else if (targetingUnit == movedUnit)
 			{
 				if (debugInput) Debug.Log($"[ClickInput] Targeting unit {movedUnit.UnitID} position changed - refreshing highlights");
+				RefreshHighlightsForSelectedUnit();
+			}
+			
+			// CRITICAL FIX: If ANY other unit moves while we have a unit selected, refresh highlights
+			// This handles enemy unit movements that could affect targeting for the selected player unit
+			else if (selectedUnit != null)
+			{
+				if (debugInput) Debug.Log($"[ClickInput] Unit {movedUnit.UnitID} position changed while {selectedUnit.UnitID} is selected - refreshing highlights for board changes");
+				
+				// Enemy unit movement might block/unblock paths or change skill targets
 				RefreshHighlightsForSelectedUnit();
 			}
 		}

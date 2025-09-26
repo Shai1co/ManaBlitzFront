@@ -235,6 +235,33 @@ namespace ManaGambit
 
 		public async UniTask JoinQueue(string mode = "practice")
 		{
+			// Backward compatibility: convert mode string to GameLaunchConfig
+			GameLaunchConfig config;
+			switch (mode.ToLower())
+			{
+				case "arena":
+				case "online":
+					config = GameLaunchConfig.PlayOnline();
+					break;
+				case "easy":
+					config = GameLaunchConfig.VsBot(BotDifficulty.Easy);
+					break;
+				case "medium":
+					config = GameLaunchConfig.VsBot(BotDifficulty.Medium);
+					break;
+				case "hard":
+					config = GameLaunchConfig.VsBot(BotDifficulty.Hard);
+					break;
+				default:
+					config = GameLaunchConfig.PlayOnline();
+					break;
+			}
+			
+			await JoinQueue(config);
+		}
+
+		public async UniTask JoinQueue(GameLaunchConfig gameConfig)
+		{
 			if (string.IsNullOrEmpty(AuthManager.Instance.Token))
 			{
 				Debug.LogError("Must be authenticated to join queue");
@@ -242,9 +269,14 @@ namespace ManaGambit
 			}
 
 			string url = ServerConfig.ServerUrl + JoinQueuePath;
-			var payload = new JoinQueueRequest { region = "auto", mode = mode };
+			var payload = new JoinQueueRequest 
+			{ 
+				region = "auto", 
+				mode = gameConfig.ToServerMode(),
+				difficulty = gameConfig.GetDifficultyString()
+			};
 			string json = JsonUtility.ToJson(payload);
-			Debug.Log($"{LogTag} POST {url} body={json}");
+			Debug.Log($"{LogTag} POST {url} body={json} gameConfig={gameConfig}");
 			var request = new UnityWebRequest(url, "POST");
 			byte[] body = System.Text.Encoding.UTF8.GetBytes(json);
 			request.uploadHandler = new UploadHandlerRaw(body);
@@ -670,13 +702,8 @@ namespace ManaGambit
 				var clickInput = FindFirstObjectByType<ClickInput>();
 				if (clickInput != null)
 				{
-					// Use reflection to safely call RefreshHighlightsForSelectedUnit
-					var refreshMethod = typeof(ClickInput).GetMethod("RefreshHighlightsForSelectedUnit", 
-						System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-					if (refreshMethod != null)
-					{
-						refreshMethod.Invoke(clickInput, null);
-					}
+					// Call the public method directly instead of using reflection
+					clickInput.RefreshHighlightsForSelectedUnit();
 				}
 			}
 			catch (System.Exception e)
@@ -1018,6 +1045,7 @@ namespace ManaGambit
 		{
 			public string region;
 			public string mode;
+			public string difficulty; // Optional: difficulty level for bot games
 		}
 
 		[Serializable]
@@ -1431,12 +1459,33 @@ namespace ManaGambit
 				{
 					LogServerMessage("GameOver", evt.data, LogTag);
 				}
-				Debug.Log($"{LogTag} GameOver: reason={evt?.data?.reason} winner={evt?.data?.winnerUserId}");
+				
+				// Parse end game reason from server
+				EndGameReason? endGameReason = null;
+				if (evt?.data?.reason != null)
+				{
+					endGameReason = EndGameReasonExtensions.FromInt(evt.data.reason);
+					if (endGameReason == null)
+					{
+						Debug.LogWarning($"{LogTag} Unknown end game reason received from server: {evt.data.reason}");
+					}
+				}
+				
+				// Log detailed GameOver info
+				string userResults = "";
+				if (evt?.data?.users != null && evt.data.users.Length > 0)
+				{
+					var results = System.Array.ConvertAll(evt.data.users, u => $"{u.userId}:{u.result}");
+					userResults = $" users=[{string.Join(", ", results)}]";
+				}
+				
+				Debug.Log($"{LogTag} GameOver: reason={evt?.data?.reason} ({endGameReason?.GetDescription() ?? "Unknown"}) winner={evt?.data?.winnerUserId} loser={evt?.data?.loserUserId}{userResults}");
+				
 				if (HudController.Instance != null)
 				{
 					// Mirror JS client: hide countdown on game over
 					HudController.Instance.StopCountdown();
-					HudController.Instance.ShowGameOver(evt?.data?.winnerUserId);
+					HudController.Instance.ShowGameOver(evt?.data?.winnerUserId, endGameReason, evt?.data);
 				}
 			});
 			room.OnMessage<ErrorEvent>("Error", evt =>

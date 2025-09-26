@@ -3,6 +3,7 @@ using UnityEngine.UI;
 using System.Collections.Generic;
 using TMPro;
 using System;
+using Cysharp.Threading.Tasks;
 
 namespace ManaGambit
 {
@@ -14,6 +15,8 @@ namespace ManaGambit
 		[SerializeField] private Image[] slotImages = new Image[SkillSlotCount];
 		[SerializeField] private TextMeshProUGUI[] slotTexts = new TextMeshProUGUI[SkillSlotCount];
 		[SerializeField] private Image[] slotSelectionOverlays = new Image[SkillSlotCount];
+		[SerializeField] private Image[] slotSelectionFill = new Image[SkillSlotCount];
+
 		[SerializeField] private Sprite[] iconLibrary; // Assign all skill sprites here; keyed by sprite.name
 		[SerializeField] private Sprite defaultSkillSprite;
 		[SerializeField] private bool debugIcons = false;
@@ -28,6 +31,12 @@ namespace ManaGambit
 	private bool isSubscribedToManaEvents = false;
 	private ClickInput cachedClickInput;
 	private int selectedSkillIndex = -1; // Track currently selected skill (-1 means none selected)
+	
+	// Cooldown system
+	private bool[] skillsOnCooldown = new bool[SkillSlotCount];
+	private float[] cooldownStartTimes = new float[SkillSlotCount];
+	private float[] cooldownDurations = new float[SkillSlotCount];
+	private const float COOLDOWN_FILL_SPEED = 1f; // How fast the fill lerps (1 = matches cooldown duration exactly)
 
 		private void Awake()
 		{
@@ -66,6 +75,9 @@ namespace ManaGambit
 			{
 				TrySubscribeToManaEvents();
 			}
+			
+			// Update cooldowns
+			UpdateCooldowns();
 		}
 
 		private void TrySubscribeToManaEvents()
@@ -205,7 +217,7 @@ namespace ManaGambit
 
 			int capturedIndex = i;
 			button.onClick.AddListener(() => OnSkillClicked(capturedIndex));
-			button.interactable = IsSkillUsableByPips(action);
+			button.interactable = IsSkillUsable(capturedIndex, action);
 		}
 		
 		// Restore selection after refreshing
@@ -221,6 +233,16 @@ namespace ManaGambit
 			if (bar == null) return true; // don't block if mana bar missing
 			return bar.CurrentPips >= Mathf.Max(0, cost);
 		}
+		
+		private bool IsSkillUsable(int skillIndex, UnitConfig.ActionInfo action)
+		{
+			// Check if skill is on cooldown
+			if (IsSkillOnCooldown(skillIndex))
+				return false;
+				
+			// Check mana/pip requirements
+			return IsSkillUsableByPips(action);
+		}
 
 		private void HandleManaChanged(int pips)
 		{
@@ -230,7 +252,7 @@ namespace ManaGambit
 			}
 		}
 
-		private void ResetSlots()
+			private void ResetSlots()
 		{
 			for (int i = 0; i < SkillSlotCount; i++)
 			{
@@ -252,8 +274,24 @@ namespace ManaGambit
 					button.onClick.RemoveAllListeners();
 					button.interactable = false;
 				}
+				
+				// Reset cooldown fill images to 0 when clearing slots
+				var fillImage = GetFillImage(i);
+				if (fillImage != null)
+				{
+					fillImage.fillAmount = 0f;
+				}
+				
 			// Note: Selection overlays are managed separately via UpdateSelectionOverlays()
 			// to preserve selection state during refreshes
+			}
+			
+			// Clear all cooldown states when resetting
+			for (int i = 0; i < SkillSlotCount; i++)
+			{
+				skillsOnCooldown[i] = false;
+				cooldownStartTimes[i] = 0f;
+				cooldownDurations[i] = 0f;
 			}
 		}
 
@@ -519,7 +557,180 @@ namespace ManaGambit
 			return $"{baseName} ({cost})";
 		}
 
-		// ( Mana display moved to ManaBarUI )
+			// ( Mana display moved to ManaBarUI )
+		
+		#region Cooldown System
+		
+		/// <summary>
+		/// Starts a cooldown for the specified skill slot
+		/// </summary>
+		/// <param name="skillIndex">Index of the skill slot (0-3)</param>
+		/// <param name="duration">Cooldown duration in seconds</param>
+		public void StartSkillCooldown(int skillIndex, float duration)
+		{
+			if (skillIndex < 0 || skillIndex >= SkillSlotCount)
+			{
+				Debug.LogWarning($"[SkillBarUI] Invalid skill index for cooldown: {skillIndex}");
+				return;
+			}
+			
+			if (duration <= 0f)
+			{
+				Debug.LogWarning($"[SkillBarUI] Invalid cooldown duration: {duration}");
+				return;
+			}
+			
+			// Set cooldown state
+			skillsOnCooldown[skillIndex] = true;
+			cooldownStartTimes[skillIndex] = Time.time;
+			cooldownDurations[skillIndex] = duration;
+			
+			// Set initial fill to 1 (full)
+			var fillImage = GetFillImage(skillIndex);
+			if (fillImage != null)
+			{
+				fillImage.fillAmount = 1f;
+			}
+			
+			// Make button non-interactable
+			var button = GetButton(skillIndex);
+			if (button != null)
+			{
+				button.interactable = false;
+			}
+			
+			// Update selection overlays since interactability changed
+			UpdateSelectionOverlays();
+		}
+		
+		/// <summary>
+		/// Checks if a skill is currently on cooldown
+		/// </summary>
+		/// <param name="skillIndex">Index of the skill slot (0-3)</param>
+		/// <returns>True if the skill is on cooldown</returns>
+		public bool IsSkillOnCooldown(int skillIndex)
+		{
+			if (skillIndex < 0 || skillIndex >= SkillSlotCount)
+				return false;
+				
+			return skillsOnCooldown[skillIndex];
+		}
+		
+		/// <summary>
+		/// Gets the remaining cooldown time for a skill
+		/// </summary>
+		/// <param name="skillIndex">Index of the skill slot (0-3)</param>
+		/// <returns>Remaining cooldown time in seconds (0 if not on cooldown)</returns>
+		public float GetRemainingCooldown(int skillIndex)
+		{
+			if (skillIndex < 0 || skillIndex >= SkillSlotCount || !skillsOnCooldown[skillIndex])
+				return 0f;
+				
+			float elapsed = Time.time - cooldownStartTimes[skillIndex];
+			float remaining = cooldownDurations[skillIndex] - elapsed;
+			return Mathf.Max(0f, remaining);
+		}
+		
+		private void UpdateCooldowns()
+		{
+			for (int i = 0; i < SkillSlotCount; i++)
+			{
+				if (!skillsOnCooldown[i]) continue;
+				
+				float elapsed = Time.time - cooldownStartTimes[i];
+				float progress = elapsed / cooldownDurations[i];
+				
+				// Update fill amount (1 -> 0 as cooldown progresses)
+				var fillImage = GetFillImage(i);
+				if (fillImage != null)
+				{
+					fillImage.fillAmount = Mathf.Lerp(1f, 0f, progress);
+				}
+				
+				// Check if cooldown is finished
+				if (progress >= 1f)
+				{
+					EndCooldown(i);
+				}
+			}
+		}
+		
+		private void EndCooldown(int skillIndex)
+		{
+			if (skillIndex < 0 || skillIndex >= SkillSlotCount) return;
+			
+			// Clear cooldown state
+			skillsOnCooldown[skillIndex] = false;
+			cooldownStartTimes[skillIndex] = 0f;
+			cooldownDurations[skillIndex] = 0f;
+			
+			// Set fill to 0 (empty)
+			var fillImage = GetFillImage(skillIndex);
+			if (fillImage != null)
+			{
+				fillImage.fillAmount = 0f;
+			}
+			
+			// Refresh the slot to restore proper interactability based on mana/pips
+			// This will check mana cost and set button.interactable accordingly
+			RefreshSingleSkill(skillIndex);
+			
+			// Update selection overlays since interactability may have changed
+			UpdateSelectionOverlays();
+		}
+		
+		private Image GetFillImage(int index)
+		{
+			return (slotSelectionFill != null && index >= 0 && index < slotSelectionFill.Length) ? slotSelectionFill[index] : null;
+		}
+		
+		/// <summary>
+		/// Refreshes a single skill slot's state (used when cooldown ends)
+		/// </summary>
+		private void RefreshSingleSkill(int skillIndex)
+		{
+			if (skillIndex < 0 || skillIndex >= SkillSlotCount || boundUnit == null) return;
+			
+			var cfg = unitConfig != null ? unitConfig : (NetworkManager.Instance != null ? NetworkManager.Instance.UnitConfigAsset : null);
+			if (cfg == null) return;
+			
+			// Ensure config is populated (same logic as Refresh method)
+			if ((cfg.units == null || cfg.units.Length == 0))
+			{
+				try 
+				{ 
+					cfg.LoadFromJson(); 
+				} 
+				catch (System.Exception ex)
+				{
+					if (debugIcons) Debug.LogError($"[SkillBarUI] RefreshSingleSkill failed to load config: {ex.Message}");
+					return;
+				}
+			}
+			
+			var data = cfg.GetData(boundUnit.PieceId);
+			if (data == null)
+			{
+				// Fallback: case-insensitive lookup
+				data = FindUnitDataFallback(cfg, boundUnit.PieceId);
+			}
+			if (data == null || data.actions == null) return;
+			
+			var button = GetButton(skillIndex);
+			if (button == null) return;
+			
+			var action = (skillIndex < data.actions.Length) ? data.actions[skillIndex] : null;
+			if (action == null)
+			{
+				button.interactable = false;
+				return;
+			}
+			
+			// Set interactability based on both cooldown and mana
+			button.interactable = IsSkillUsable(skillIndex, action);
+		}
+		
+		#endregion
 	}
 }
 

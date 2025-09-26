@@ -26,6 +26,7 @@ namespace ManaGambit
 		[SerializeField, Tooltip("Player names container - set active when joining match")] private GameObject playerNamesContainer;
 		[SerializeField, Tooltip("Text component for local player name")] private TextMeshProUGUI localPlayerNameText;
 		[SerializeField, Tooltip("Text component for opponent player name")] private TextMeshProUGUI opponentPlayerNameText;
+		[SerializeField, Tooltip("Text component for showing the end game reason")] private TextMeshProUGUI gameOverReasonText;
 		[SerializeField, Tooltip("Event invoked when countdown timer reaches 0 after match starts")] private UnityEvent onCountdownTimerReachesZero;
 
 		private System.Threading.CancellationTokenSource toastCts;
@@ -213,6 +214,16 @@ namespace ManaGambit
 
 		public void ShowGameOver(string winnerUserId)
 		{
+			ShowGameOver(winnerUserId, null);
+		}
+
+		public void ShowGameOver(string winnerUserId, EndGameReason? endGameReason)
+		{
+			ShowGameOver(winnerUserId, endGameReason, null);
+		}
+
+		public void ShowGameOver(string winnerUserId, EndGameReason? endGameReason, GameOverData gameOverData)
+		{
 			// Always show the root game over panel
 			if (gameOverPanel != null) gameOverPanel.SetActive(true);
 
@@ -222,9 +233,23 @@ namespace ManaGambit
 			// Determine win/lose for the local player
 			bool hasWinner = !string.IsNullOrEmpty(winnerUserId);
 			bool didLocalPlayerWin = false;
+			string localPlayerResult = "unknown";
+			
 			if (hasWinner && !string.IsNullOrEmpty(AuthManager.Instance?.UserId))
 			{
 				didLocalPlayerWin = string.Equals(winnerUserId, AuthManager.Instance.UserId);
+			}
+			
+			// Try to get more specific result from server data
+			if (gameOverData != null && gameOverData.users != null && !string.IsNullOrEmpty(AuthManager.Instance?.UserId))
+			{
+				var localUser = System.Array.Find(gameOverData.users, u => string.Equals(u.userId, AuthManager.Instance.UserId));
+				if (localUser != null && !string.IsNullOrEmpty(localUser.result))
+				{
+					localPlayerResult = localUser.result; // "win", "loss", "draw"
+					didLocalPlayerWin = localPlayerResult == "win";
+					hasWinner = localPlayerResult != "draw";
+				}
 			}
 
 			// Only use dedicated win/lose UI; never use generic text
@@ -233,6 +258,24 @@ namespace ManaGambit
 			if (gameOverWinText != null) gameOverWinText.gameObject.SetActive(hasWinner && didLocalPlayerWin);
 			if (gameOverLoseText != null) gameOverLoseText.gameObject.SetActive(hasWinner && !didLocalPlayerWin);
 			//if (gameOverText != null) gameOverText.enabled = false;
+
+			// Display the end game reason if provided
+			if (gameOverReasonText != null)
+			{
+				if (endGameReason.HasValue)
+				{
+					string reasonText = endGameReason.Value.GetUIDescription();
+					gameOverReasonText.text = reasonText;
+					gameOverReasonText.gameObject.SetActive(true);
+				}
+				else
+				{
+					gameOverReasonText.gameObject.SetActive(false);
+				}
+			}
+			
+			// Log detailed results for debugging
+			Debug.Log($"[HUD] GameOver - Winner: {winnerUserId}, LocalPlayerResult: {localPlayerResult}, DidLocalPlayerWin: {didLocalPlayerWin}, Reason: {endGameReason?.GetUIDescription()}");
 		}
 
 		public void HideGameOver()
