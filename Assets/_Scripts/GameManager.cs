@@ -11,6 +11,7 @@ namespace ManaGambit
         public static GameManager Instance { get; private set; }
 
         private Dictionary<string, Unit> units = new Dictionary<string, Unit>();
+        private bool _isReloading;
 
         private void Awake()
         {
@@ -23,12 +24,21 @@ namespace ManaGambit
         }
         public void RestartScene()
         {
+            if (_isReloading)
+            {
+                return;
+            }
             RestartSceneAsync().Forget();
         }
         public async UniTask RestartSceneAsync()
         {
+            if (_isReloading)
+            {
+                return;
+            }
             try
             {
+                _isReloading = true;
                 // Clear singleton state before reload to avoid stale data
                 ClearUnits();
                 
@@ -40,6 +50,7 @@ namespace ManaGambit
                 if (asyncOp == null)
                 {
                     Debug.LogError($"[GameManager] Failed to initiate async scene load for '{sceneName}'");
+                    _isReloading = false;
                     return;
                 }
                 
@@ -52,11 +63,13 @@ namespace ManaGambit
                 if (asyncOp.isDone)
                 {
                     Debug.Log($"[GameManager] Scene '{sceneName}' reloaded successfully");
+                    _isReloading = false;
                 }
                 else
                 {
                     Debug.LogError($"[GameManager] Scene '{sceneName}' failed to load properly");
                     // Scene reload failed - could implement fallback behavior here
+                    _isReloading = false;
                 }
             }
             catch (System.Exception e)
@@ -64,6 +77,7 @@ namespace ManaGambit
                 Debug.LogError($"[GameManager] Error during scene restart: {e.Message}\nStack trace: {e.StackTrace}");
                 // Restore safe state - reinitialize critical components
                 ClearUnits();
+                _isReloading = false;
             }
         }
         public void RegisterUnit(Unit unit, string id)

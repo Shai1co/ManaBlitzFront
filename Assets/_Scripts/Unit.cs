@@ -790,13 +790,10 @@ namespace ManaGambit
             bool isOwn = AuthManager.Instance != null &&
                         string.Equals(ownerId, AuthManager.Instance.UserId, StringComparison.Ordinal);
 
-            if (!isOwn)
+            if (!isOwn && highlighted)
             {
                 // Enemy units should never be highlighted for selection
-                if (highlighted)
-                {
-                    Debug.LogWarning($"[Unit] Attempted to highlight enemy unit {name} (owner: {ownerId}) - ignoring");
-                }
+                Debug.LogWarning($"[Unit] Attempted to highlight enemy unit {name} (owner: {ownerId}) - ignoring");
                 return;
             }
 

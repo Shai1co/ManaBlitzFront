@@ -48,7 +48,8 @@ namespace ManaGambit
 			}
 			AutoWireSlotsIfNeeded();
 			ResetSlots();
-			
+			ResetCooldownState();
+
 			// Cache ClickInput reference to avoid FindFirstObjectByType calls
 			cachedClickInput = FindFirstObjectByType<ClickInput>();
 		}
@@ -139,6 +140,7 @@ namespace ManaGambit
 		boundUnit = null;
 		selectedSkillIndex = -1; // Clear selection when clearing unit
 		ResetSlots();
+		ResetCooldownState();
 	}
 
 		private void Refresh()
@@ -285,8 +287,11 @@ namespace ManaGambit
 			// Note: Selection overlays are managed separately via UpdateSelectionOverlays()
 			// to preserve selection state during refreshes
 			}
-			
-			// Clear all cooldown states when resetting
+		}
+
+		private void ResetCooldownState()
+		{
+			// Clear all cooldown states for true teardown/initialization
 			for (int i = 0; i < SkillSlotCount; i++)
 			{
 				skillsOnCooldown[i] = false;

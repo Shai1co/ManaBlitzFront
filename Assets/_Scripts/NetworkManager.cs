@@ -8,6 +8,7 @@ using Newtonsoft.Json.Linq;
 using System.Collections.Generic;
 using System;
 using System.Threading;
+using System.Linq;
 
 namespace ManaGambit
 {
@@ -1455,37 +1456,107 @@ namespace ManaGambit
 			});
 			room.OnMessage<GameOverEvent>("GameOver", evt =>
 			{
-				if (verboseNetworkLogging && evt?.data != null)
+				try 
 				{
-					LogServerMessage("GameOver", evt.data, LogTag);
-				}
-				
-				// Parse end game reason from server
-				EndGameReason? endGameReason = null;
-				if (evt?.data?.reason != null)
-				{
-					endGameReason = EndGameReasonExtensions.FromInt(evt.data.reason);
-					if (endGameReason == null)
+					Debug.Log($"{LogTag} 🎯 GameOver event received!");
+					
+					// Enhanced debugging - log raw data first
+					if (evt == null)
 					{
-						Debug.LogWarning($"{LogTag} Unknown end game reason received from server: {evt.data.reason}");
+						Debug.LogError($"{LogTag} GameOver event is null!");
+						return;
+					}
+					
+					if (evt.data == null)
+					{
+						Debug.LogError($"{LogTag} GameOver event data is null!");
+						return;
+					}
+					
+					if (verboseNetworkLogging)
+					{
+						LogServerMessage("GameOver", evt.data, LogTag);
+						Debug.Log($"{LogTag} Raw GameOver JSON: {JsonUtility.ToJson(evt.data)}");
+					}
+					
+					// Parse end game reason from server
+					EndGameReason? endGameReason = null;
+					if (evt.data.reason != 0) // Check for non-zero reason
+					{
+						endGameReason = EndGameReasonExtensions.FromInt(evt.data.reason);
+						if (endGameReason == null)
+						{
+							Debug.LogWarning($"{LogTag} Unknown end game reason received from server: {evt.data.reason}");
+						}
+					}
+					else
+					{
+						Debug.LogWarning($"{LogTag} GameOver reason is 0 or missing");
+					}
+					
+					// Enhanced user results parsing with error handling
+					string userResults = "";
+					try
+					{
+						if (evt.data.users != null && evt.data.users.Length > 0)
+						{
+							var results = new List<string>();
+							for (int i = 0; i < evt.data.users.Length; i++)
+							{
+								var user = evt.data.users[i];
+								if (user != null)
+								{
+									results.Add($"{user.userId ?? "null"}:{user.result ?? "null"}");
+								}
+								else
+								{
+									results.Add("null_user");
+								}
+							}
+							userResults = $" users=[{string.Join(", ", results)}]";
+						}
+						else
+						{
+							Debug.LogWarning($"{LogTag} GameOver users array is null or empty");
+						}
+					}
+					catch (System.Exception userEx)
+					{
+						Debug.LogError($"{LogTag} Error parsing GameOver users: {userEx.Message}");
+						userResults = " users=[parse_error]";
+					}
+					
+					// Comprehensive GameOver logging
+					Debug.Log($"{LogTag} 🏆 GameOver Details:");
+					Debug.Log($"  • Reason: {evt.data.reason} ({endGameReason?.GetDescription() ?? "Unknown"})");
+					Debug.Log($"  • Winner: {evt.data.winnerUserId ?? "null"}");
+					Debug.Log($"  • Loser: {evt.data.loserUserId ?? "null"}");
+					Debug.Log($"  • ServerTick: {evt.data.serverTick}");
+					Debug.Log($"  • Users: {(evt.data.users?.Length ?? 0)} entries{userResults}");
+					
+					// Validate local player ID for debugging
+					var localPlayerId = AuthManager.Instance?.UserId;
+					Debug.Log($"  • Local Player ID: {localPlayerId ?? "null"}");
+					
+					// Show GameOver UI
+					if (HudController.Instance != null)
+					{
+						Debug.Log($"{LogTag} Calling HudController.ShowGameOver...");
+						
+						// Mirror JS client: hide countdown on game over
+						HudController.Instance.StopCountdown();
+						HudController.Instance.ShowGameOver(evt.data.winnerUserId, endGameReason, evt.data);
+						
+						Debug.Log($"{LogTag} HudController.ShowGameOver completed");
+					}
+					else
+					{
+						Debug.LogError($"{LogTag} HudController.Instance is null - cannot show GameOver UI!");
 					}
 				}
-				
-				// Log detailed GameOver info
-				string userResults = "";
-				if (evt?.data?.users != null && evt.data.users.Length > 0)
+				catch (System.Exception ex)
 				{
-					var results = System.Array.ConvertAll(evt.data.users, u => $"{u.userId}:{u.result}");
-					userResults = $" users=[{string.Join(", ", results)}]";
-				}
-				
-				Debug.Log($"{LogTag} GameOver: reason={evt?.data?.reason} ({endGameReason?.GetDescription() ?? "Unknown"}) winner={evt?.data?.winnerUserId} loser={evt?.data?.loserUserId}{userResults}");
-				
-				if (HudController.Instance != null)
-				{
-					// Mirror JS client: hide countdown on game over
-					HudController.Instance.StopCountdown();
-					HudController.Instance.ShowGameOver(evt?.data?.winnerUserId, endGameReason, evt?.data);
+					Debug.LogError($"{LogTag} Exception in GameOver handler: {ex.Message}\n{ex.StackTrace}");
 				}
 			});
 			room.OnMessage<ErrorEvent>("Error", evt =>

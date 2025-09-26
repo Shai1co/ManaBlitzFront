@@ -26,6 +26,7 @@ namespace ManaGambit
     /// </summary>
     public enum BotDifficulty
     {
+        Unspecified,
         Easy,
         Medium,
         Hard
@@ -38,9 +39,9 @@ namespace ManaGambit
     public class GameLaunchConfig
     {
         public GameType gameType;
-        public BotDifficulty? botDifficulty; // Only used for VsBot game type
-        
-        public GameLaunchConfig(GameType gameType, BotDifficulty? botDifficulty = null)
+        public BotDifficulty botDifficulty; // Only used for VsBot game type
+
+        public GameLaunchConfig(GameType gameType, BotDifficulty botDifficulty = BotDifficulty.Unspecified)
         {
             this.gameType = gameType;
             this.botDifficulty = botDifficulty;
@@ -71,10 +72,10 @@ namespace ManaGambit
         /// <returns>Difficulty string or null</returns>
         public string GetDifficultyString()
         {
-            if (gameType != GameType.VsBot || !botDifficulty.HasValue)
+            if (gameType != GameType.VsBot || botDifficulty == BotDifficulty.Unspecified)
                 return null;
-                
-            switch (botDifficulty.Value)
+
+            switch (botDifficulty)
             {
                 case BotDifficulty.Easy:
                     return "easy";
@@ -113,9 +114,9 @@ namespace ManaGambit
         
         public override string ToString()
         {
-            if (gameType == GameType.VsBot && botDifficulty.HasValue)
+            if (gameType == GameType.VsBot && botDifficulty != BotDifficulty.Unspecified)
             {
-                return $"{gameType} ({botDifficulty.Value})";
+                return $"{gameType} ({botDifficulty})";
             }
             return gameType.ToString();
         }
@@ -151,6 +152,8 @@ namespace ManaGambit
         {
             switch (difficulty)
             {
+                case BotDifficulty.Unspecified:
+                    return "Unspecified";
                 case BotDifficulty.Easy:
                     return "Easy";
                 case BotDifficulty.Medium:

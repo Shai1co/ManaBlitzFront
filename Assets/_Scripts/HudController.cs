@@ -224,58 +224,138 @@ namespace ManaGambit
 
 		public void ShowGameOver(string winnerUserId, EndGameReason? endGameReason, GameOverData gameOverData)
 		{
-			// Always show the root game over panel
-			if (gameOverPanel != null) gameOverPanel.SetActive(true);
-
-			// Hide player names when game is over
-			HidePlayerNames();
-
-			// Determine win/lose for the local player
-			bool hasWinner = !string.IsNullOrEmpty(winnerUserId);
-			bool didLocalPlayerWin = false;
-			string localPlayerResult = "unknown";
-			
-			if (hasWinner && !string.IsNullOrEmpty(AuthManager.Instance?.UserId))
+			try
 			{
-				didLocalPlayerWin = string.Equals(winnerUserId, AuthManager.Instance.UserId);
-			}
-			
-			// Try to get more specific result from server data
-			if (gameOverData != null && gameOverData.users != null && !string.IsNullOrEmpty(AuthManager.Instance?.UserId))
-			{
-				var localUser = System.Array.Find(gameOverData.users, u => string.Equals(u.userId, AuthManager.Instance.UserId));
-				if (localUser != null && !string.IsNullOrEmpty(localUser.result))
+				Debug.Log($"[HUD] 🎮 ShowGameOver called");
+				Debug.Log($"  • WinnerUserId: {winnerUserId ?? "null"}");
+				Debug.Log($"  • EndGameReason: {endGameReason?.ToString() ?? "null"}");
+				Debug.Log($"  • GameOverData: {(gameOverData != null ? "provided" : "null")}");
+				
+				// Always show the root game over panel
+				if (gameOverPanel != null) 
 				{
-					localPlayerResult = localUser.result; // "win", "loss", "draw"
-					didLocalPlayerWin = localPlayerResult == "win";
-					hasWinner = localPlayerResult != "draw";
-				}
-			}
-
-			// Only use dedicated win/lose UI; never use generic text
-			if (gameOverWinContainer != null) gameOverWinContainer.SetActive(hasWinner && didLocalPlayerWin);
-			if (gameOverLoseContainer != null) gameOverLoseContainer.SetActive(hasWinner && !didLocalPlayerWin);
-			if (gameOverWinText != null) gameOverWinText.gameObject.SetActive(hasWinner && didLocalPlayerWin);
-			if (gameOverLoseText != null) gameOverLoseText.gameObject.SetActive(hasWinner && !didLocalPlayerWin);
-			//if (gameOverText != null) gameOverText.enabled = false;
-
-			// Display the end game reason if provided
-			if (gameOverReasonText != null)
-			{
-				if (endGameReason.HasValue)
-				{
-					string reasonText = endGameReason.Value.GetUIDescription();
-					gameOverReasonText.text = reasonText;
-					gameOverReasonText.gameObject.SetActive(true);
+					gameOverPanel.SetActive(true);
+					Debug.Log($"[HUD] GameOver panel activated");
 				}
 				else
 				{
-					gameOverReasonText.gameObject.SetActive(false);
+					Debug.LogError($"[HUD] GameOver panel is null! Please assign it in the inspector.");
 				}
+
+				// Hide player names when game is over
+				HidePlayerNames();
+
+				// Determine win/lose for the local player
+				bool hasWinner = !string.IsNullOrEmpty(winnerUserId);
+				bool didLocalPlayerWin = false;
+				string localPlayerResult = "unknown";
+				var localPlayerId = AuthManager.Instance?.UserId;
+				
+				Debug.Log($"  • Local Player ID: {localPlayerId ?? "null"}");
+				Debug.Log($"  • Has Winner: {hasWinner}");
+				
+				if (hasWinner && !string.IsNullOrEmpty(localPlayerId))
+				{
+					didLocalPlayerWin = string.Equals(winnerUserId, localPlayerId);
+					Debug.Log($"  • Initial DidLocalPlayerWin (from winner ID): {didLocalPlayerWin}");
+				}
+				
+				// Try to get more specific result from server data
+				if (gameOverData != null && gameOverData.users != null && !string.IsNullOrEmpty(localPlayerId))
+				{
+					Debug.Log($"  • Searching {gameOverData.users.Length} user entries for local player");
+					
+					var localUser = System.Array.Find(gameOverData.users, u => 
+					{
+						bool matches = string.Equals(u?.userId, localPlayerId);
+						Debug.Log($"    - Checking user: {u?.userId ?? "null"} vs {localPlayerId} = {matches}");
+						return matches;
+					});
+					
+					if (localUser != null && !string.IsNullOrEmpty(localUser.result))
+					{
+						localPlayerResult = localUser.result; // "win", "loss", "draw"
+						didLocalPlayerWin = localPlayerResult == "win";
+						hasWinner = localPlayerResult != "draw";
+						
+						Debug.Log($"  • Found local user result: {localPlayerResult}");
+						Debug.Log($"  • Updated DidLocalPlayerWin: {didLocalPlayerWin}");
+						Debug.Log($"  • Updated HasWinner: {hasWinner}");
+					}
+					else
+					{
+						Debug.LogWarning($"[HUD] Local user not found in GameOver users array or result is empty");
+					}
+				}
+				else
+				{
+					Debug.LogWarning($"[HUD] GameOverData is incomplete: data={gameOverData != null}, users={gameOverData?.users != null}, localPlayerId={!string.IsNullOrEmpty(localPlayerId)}");
+				}
+
+				// Show/hide UI elements based on results
+				bool showWin = hasWinner && didLocalPlayerWin;
+				bool showLose = hasWinner && !didLocalPlayerWin;
+				
+				Debug.Log($"  • Show Win UI: {showWin}");
+				Debug.Log($"  • Show Lose UI: {showLose}");
+				
+				// Only use dedicated win/lose UI; never use generic text
+				if (gameOverWinContainer != null) 
+				{
+					gameOverWinContainer.SetActive(showWin);
+					Debug.Log($"[HUD] Win container: {(showWin ? "shown" : "hidden")}");
+				}
+				else if (showWin)
+				{
+					Debug.LogWarning($"[HUD] gameOverWinContainer is null but should show win UI");
+				}
+				
+				if (gameOverLoseContainer != null) 
+				{
+					gameOverLoseContainer.SetActive(showLose);
+					Debug.Log($"[HUD] Lose container: {(showLose ? "shown" : "hidden")}");
+				}
+				else if (showLose)
+				{
+					Debug.LogWarning($"[HUD] gameOverLoseContainer is null but should show lose UI");
+				}
+				
+				if (gameOverWinText != null) gameOverWinText.gameObject.SetActive(showWin);
+				if (gameOverLoseText != null) gameOverLoseText.gameObject.SetActive(showLose);
+
+				// Display the end game reason if provided
+				if (gameOverReasonText != null)
+				{
+					if (endGameReason.HasValue)
+					{
+						string reasonText = endGameReason.Value.GetUIDescription();
+						gameOverReasonText.text = reasonText;
+						gameOverReasonText.gameObject.SetActive(true);
+						Debug.Log($"[HUD] End game reason displayed: {reasonText}");
+					}
+					else
+					{
+						gameOverReasonText.gameObject.SetActive(false);
+						Debug.Log($"[HUD] End game reason hidden (no reason provided)");
+					}
+				}
+				else
+				{
+					Debug.LogWarning($"[HUD] gameOverReasonText is null - please assign it in the inspector to show end game reasons");
+				}
+				
+				// Final summary log
+				Debug.Log($"[HUD] 🏆 GameOver Summary:");
+				Debug.Log($"  • Winner: {winnerUserId ?? "none"}");
+				Debug.Log($"  • Local Result: {localPlayerResult}");
+				Debug.Log($"  • Local Won: {didLocalPlayerWin}");  
+				Debug.Log($"  • Reason: {endGameReason?.GetUIDescription() ?? "none"}");
+				Debug.Log($"  • UI State: Win={showWin}, Lose={showLose}");
 			}
-			
-			// Log detailed results for debugging
-			Debug.Log($"[HUD] GameOver - Winner: {winnerUserId}, LocalPlayerResult: {localPlayerResult}, DidLocalPlayerWin: {didLocalPlayerWin}, Reason: {endGameReason?.GetUIDescription()}");
+			catch (System.Exception ex)
+			{
+				Debug.LogError($"[HUD] Exception in ShowGameOver: {ex.Message}\n{ex.StackTrace}");
+			}
 		}
 
 		public void HideGameOver()
@@ -408,6 +488,46 @@ namespace ManaGambit
 		{
 			// Placeholder hook; integrate with mana UI when available
 			//			Debug.Log($"[HUD] ManaUpdate player={playerId} mana={mana}");
+		}
+
+		/// <summary>
+		/// Test method to verify GameOver functionality (for debugging)
+		/// </summary>
+		[System.Diagnostics.Conditional("UNITY_EDITOR")]
+		public void TestGameOver()
+		{
+			Debug.Log("[HUD] 🧪 Testing GameOver functionality...");
+			
+			// Create test data
+			var testGameOverData = new GameOverData
+			{
+				reason = 1, // Elimination
+				winnerUserId = "test_winner_123",
+				loserUserId = "test_loser_456", 
+				serverTick = 1000,
+				users = new GameOverUserStats[]
+				{
+					new GameOverUserStats
+					{
+						userId = "test_winner_123",
+						result = "win",
+						elo = new PlayerStatChange { before = 1200, after = 1250 },
+						xp = new PlayerStatChange { before = 100, after = 150 },
+						level = new PlayerStatChange { before = 1, after = 2 }
+					},
+					new GameOverUserStats
+					{
+						userId = "test_loser_456", 
+						result = "loss",
+						elo = new PlayerStatChange { before = 1100, after = 1050 },
+						xp = new PlayerStatChange { before = 50, after = 75 },
+						level = new PlayerStatChange { before = 1, after = 1 }
+					}
+				}
+			};
+			
+			// Test with local player as winner
+			ShowGameOver("test_winner_123", EndGameReason.Elimination, testGameOverData);
 		}
 	}
 }
